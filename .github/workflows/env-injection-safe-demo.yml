@@ -11,7 +11,7 @@ jobs:
         run: |
           BRANCH="feature/hotfix
           MALICIOUS_VAR=HACKED"
-          SAFE_BRANCH=$(echo "$BRANCH" | tr -cd 'A-Za-z0-9:-' | tr '\n' '-')
+          SAFE_BRANCH=$(echo "$BRANCH" | tr -c 'A-Za-z0-9:-' '-' | tr -s '-' | sed 's/-$//')
           echo "TAG=$SAFE_BRANCH" >> $GITHUB_ENV
 
       - name: Print environment variables
