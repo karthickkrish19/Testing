@@ -1,0 +1,23 @@
+
+name: Environment Injection Demo
+
+on:
+  workflow_dispatch:  # Allows manual trigger
+
+jobs:
+  demo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Simulate malicious branch name
+        run: |
+          # Simulate a malicious branch name with newline and assignment
+          BRANCH="feature/hotfix
+MALICIOUS_VAR=HACKED"
+
+          # Write to GITHUB_ENV using unsafe method
+          echo "TAG=${BRANCH//[^A-Za-z0-9:]/-}" >> $GITHUB_ENV
+
+      - name: Print environment variables
+        run: |
+          echo "TAG=$TAG"
+          echo "MALICIOUS_VAR=$MALICIOUS_VAR"
