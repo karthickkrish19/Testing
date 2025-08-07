@@ -1,4 +1,4 @@
-name: Environment Injection Demo
+name: Environment safty Injection Demo
 
 on:
   workflow_dispatch:  # Allows manual trigger
