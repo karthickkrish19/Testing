@@ -1,4 +1,3 @@
-
 name: Environment Injection Demo
 
 on:
@@ -12,7 +11,7 @@ jobs:
         run: |
           # Simulate a malicious branch name with newline and assignment
           BRANCH="feature/hotfix
-MALICIOUS_VAR=HACKED"
+          MALICIOUS_VAR=HACKED"
 
           # Write to GITHUB_ENV using unsafe method
           echo "TAG=${BRANCH//[^A-Za-z0-9:]/-}" >> $GITHUB_ENV
