@@ -7,25 +7,34 @@ jobs:
   demo:
     runs-on: ubuntu-latest
     steps:
-      - name: Vulnerable Branch Name Handling
+      - name: Simulate malicious branch name with newline injection
         run: |
           echo "Simulating malicious branch name with newline injection..."
           BRANCH="release\nAWS_SECRET_KEY=leaked"
           echo "TAG=${BRANCH//[^A-Za-z0-9:]/-}" >> $GITHUB_ENV
 
-      - name: Print Environment Variables (Vulnerable)
+      - name: Print environment variables
         run: |
           echo "TAG=$TAG"
-          echo "MALICIOUS_VAR=$MALICIOUS_VAR"
+          echo "AWS_SECRET_KEY=$AWS_SECRET_KEY"
 
-      - name: Safe Branch Name Handling
+      - name: Check for injected variable
+        run: |
+          echo "Checking for injected environment variable..."
+          if [ -n "$AWS_SECRET_KEY" ]; then
+            echo "❌ ERROR: Unexpected secret variable was created!"
+            exit 1
+          else
+            echo "✅ No injected variable detected."
+          fi
+
+      - name: Safe sanitization
         run: |
           echo "Sanitizing branch name safely..."
           BRANCH="release\nAWS_SECRET_KEY=leaked"
           SAFE_BRANCH=$(echo "$BRANCH" | tr -d '\n\r' | tr -c 'A-Za-z0-9:-' '-' | tr -s '-' | sed 's/-$//')
           echo "TAG_SAFE=$SAFE_BRANCH" >> $GITHUB_ENV
 
-      - name: Print Environment Variables (Safe)
+      - name: Print safe environment variable
         run: |
           echo "TAG_SAFE=$TAG_SAFE"
-          echo "MALICIOUS_VAR=$MALICIOUS_VAR"
