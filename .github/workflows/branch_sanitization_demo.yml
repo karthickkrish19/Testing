@@ -10,8 +10,7 @@ jobs:
       - name: Vulnerable Branch Name Handling
         run: |
           echo "Simulating malicious branch name with newline injection..."
-          BRANCH="feature/hotfix
-          MALICIOUS_VAR=HACKED"
+          BRANCH="release\nAWS_SECRET_KEY=leaked"
           echo "TAG=${BRANCH//[^A-Za-z0-9:]/-}" >> $GITHUB_ENV
 
       - name: Print Environment Variables (Vulnerable)
@@ -22,8 +21,7 @@ jobs:
       - name: Safe Branch Name Handling
         run: |
           echo "Sanitizing branch name safely..."
-          BRANCH="feature/hotfix
-          MALICIOUS_VAR=HACKED"
+          BRANCH="release\nAWS_SECRET_KEY=leaked"
           SAFE_BRANCH=$(echo "$BRANCH" | tr -d '\n\r' | tr -c 'A-Za-z0-9:-' '-' | tr -s '-' | sed 's/-$//')
           echo "TAG_SAFE=$SAFE_BRANCH" >> $GITHUB_ENV
 
