@@ -20,11 +20,4 @@ jobs:
         run: |
           echo "TAG=$TAG"
           echo "MALICIOUS_VAR=$MALICIOUS_VAR"
-      
-      - name: Safe way to sanitize branch name
-        run: |
-          BRANCH="feature/hotfix
-          MALICIOUS_VAR=HACKED"
-          SAFE_BRANCH=$(echo "$BRANCH" | tr -cd 'A-Za-z0-9:-' | tr '\n' '-')
-          echo "TAG=$SAFE_BRANCH" >> $GITHUB_ENV
 
