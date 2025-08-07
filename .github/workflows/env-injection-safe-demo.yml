@@ -1,0 +1,20 @@
+name: Environment Injection Demo
+
+on:
+  workflow_dispatch:  # Allows manual trigger
+
+jobs:
+  demo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Safe way to sanitize branch name
+        run: |
+          BRANCH="feature/hotfix
+          MALICIOUS_VAR=HACKED"
+          SAFE_BRANCH=$(echo "$BRANCH" | tr -cd 'A-Za-z0-9:-' | tr '\n' '-')
+          echo "TAG=$SAFE_BRANCH" >> $GITHUB_ENV
+
+      - name: Print environment variables
+        run: |
+          echo "TAG=$TAG"
+          echo "MALICIOUS_VAR=$MALICIOUS_VAR"
