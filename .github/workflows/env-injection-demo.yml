@@ -12,6 +12,7 @@ jobs:
           # Simulate a malicious branch name with newline and assignment
           BRANCH="feature/hotfix
             MALICIOUS_VAR=HACKED"
+            
           # Write to GITHUB_ENV using unsafe method
           echo "TAG=${BRANCH//[^A-Za-z0-9:]/-}" >> $GITHUB_ENV
 
@@ -19,3 +20,11 @@ jobs:
         run: |
           echo "TAG=$TAG"
           echo "MALICIOUS_VAR=$MALICIOUS_VAR"
+      
+      - name: Safe way to sanitize branch name
+        run: |
+          BRANCH="feature/hotfix
+          MALICIOUS_VAR=HACKED"
+          SAFE_BRANCH=$(echo "$BRANCH" | tr -cd 'A-Za-z0-9:-' | tr '\n' '-')
+          echo "TAG=$SAFE_BRANCH" >> $GITHUB_ENV
+
