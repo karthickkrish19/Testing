@@ -1,0 +1,97 @@
+Upgrading ALL packages automatically
+[2025-09-10T18:26:41.973Z] 🚀 Starting sequential package upgrade for category: all
+[2025-09-10T18:26:41.975Z] 🔍 Step 1: Discovering packages needing upgrades...
+[2025-09-10T18:27:08.601Z] 📦 Found 30 packages needing upgrades
+[2025-09-10T18:27:08.602Z] 🔄 Step 2: Building smart upgrade sequence...
+[2025-09-10T18:27:08.602Z] 📋 Upgrade sequence determined (30 packages):
+[2025-09-10T18:27:08.602Z]   1. react: 18.3.1 → 19.1.1
+[2025-09-10T18:27:08.602Z]   2. react-dom: 18.3.1 → 19.1.1
+[2025-09-10T18:27:08.602Z]   3. typescript: 4.9.5 → 5.9.2
+[2025-09-10T18:27:08.602Z]   4. @mui/material: 5.17.1 → 7.3.2
+[2025-09-10T18:27:08.602Z]   5. @azure/msal-browser: 3.28.1 → 4.22.1
+[2025-09-10T18:27:08.602Z]   6. @azure/msal-react: 2.2.0 → 3.0.19
+[2025-09-10T18:27:08.602Z]   7. eslint: 8.57.1 → 9.35.0
+[2025-09-10T18:27:08.602Z]   8. @typescript-eslint/eslint-plugin: 5.62.0 → 8.43.0
+[2025-09-10T18:27:08.603Z]   9. @typescript-eslint/parser: 5.62.0 → 8.43.0
+[2025-09-10T18:27:08.603Z]   10. @types/react: 18.3.23 → 19.1.12
+[2025-09-10T18:27:08.603Z]   11. @types/react-dom: 18.3.7 → 19.1.9
+[2025-09-10T18:27:08.603Z]   12. @types/jest: 29.5.14 → 30.0.0
+[2025-09-10T18:27:08.603Z]   13. @mui/icons-material: 5.17.1 → 7.3.2
+[2025-09-10T18:27:08.603Z]   14. @mui/lab: 5.0.0-alpha.176 → 7.0.0-beta.17
+[2025-09-10T18:27:08.603Z]   15. @testing-library/react: 14.3.1 → 16.3.0
+[2025-09-10T18:27:08.603Z]   16. @fontsource/roboto: 4.5.8 → 5.2.6
+[2025-09-10T18:27:08.603Z]   17. @microsoft/applicationinsights-react-js: 17.3.6 → 19.3.7
+[2025-09-10T18:27:08.603Z]   18. @mui/x-data-grid: 6.20.4 → 8.11.1
+[2025-09-10T18:27:08.603Z]   19. @testing-library/jest-dom: 6.6.3 → 6.8.0
+[2025-09-10T18:27:08.603Z]   20. axios: 1.10.0 → 1.11.0
+[2025-09-10T18:27:08.603Z]   21. cronstrue: 2.61.0 → 3.3.0
+[2025-09-10T18:27:08.603Z]   22. react-h5-audio-player: 3.10.0 → 3.10.1
+[2025-09-10T18:27:08.603Z]   23. react-js-cron: 4.1.0 → 5.2.0
+[2025-09-10T18:27:08.603Z]   24. react-router-dom: 6.30.1 → 7.8.2
+[2025-09-10T18:27:08.603Z]   25. web-vitals: 2.1.4 → 5.1.0
+[2025-09-10T18:27:08.603Z]   26. cross-env: 7.0.3 → 10.0.0
+[2025-09-10T18:27:08.603Z]   27. eslint-plugin-unused-imports: 2.0.0 → 4.2.0
+[2025-09-10T18:27:08.603Z]   28. husky: 8.0.3 → 9.1.7
+[2025-09-10T18:27:08.603Z]   29. postcss-preset-env: 8.5.1 → 10.3.1
+[2025-09-10T18:27:08.603Z]   30. prettier: 2.8.8 → 3.6.2
+[2025-09-10T18:27:08.603Z] 
+🚀 Step 3: Starting sequential package upgrades...
+[2025-09-10T18:27:08.603Z] 📦 Will upgrade 30 packages in dependency order
+[2025-09-10T18:27:08.603Z] 
+🔄 Package 1/30: react
+[2025-09-10T18:27:08.603Z] 🔗 react has peer dependencies that need upgrading first: react-dom
+[2025-09-10T18:27:08.603Z]   Upgrading peer dependency: react-dom
+[2025-09-10T19:10:45.092Z]   cronstrue: 2.61.0 → 3.3.0
+[2025-09-10T19:10:45.092Z]   react-h5-audio-player: 3.10.0 → 3.10.1
+[2025-09-10T19:10:45.092Z]   react-js-cron: 4.1.0 → 5.2.0
+[2025-09-10T19:10:45.092Z]   cross-env: 7.0.3 → 10.0.0
+[2025-09-10T19:10:45.092Z]   eslint-plugin-unused-imports: 2.0.0 → 4.2.0
+[2025-09-10T19:10:45.092Z]   husky: 8.0.3 → 9.1.7
+[2025-09-10T19:10:45.092Z]   postcss-preset-env: 8.5.1 → 10.3.1
+[2025-09-10T19:10:45.093Z]   prettier: 2.8.8 → 3.6.2
+[2025-09-10T19:10:45.093Z] 
+❌ FAILED UPGRADES:
+[2025-09-10T19:10:45.093Z]   react-dom: 18.3.1 → 19.1.1
+[2025-09-10T19:10:45.093Z]     Reason: Peer dependency conflict: react-dom requires react@^19.1.1
+[2025-09-10T19:10:45.093Z]   react: 18.3.1 → 19.1.1
+[2025-09-10T19:10:45.093Z]     Reason: Installing dependencies
+[2025-09-10T19:10:45.093Z]   typescript: 4.9.5 → 5.9.2
+[2025-09-10T19:10:45.093Z]     Reason: Installing dependencies
+[2025-09-10T19:10:45.093Z]   @mui/material: 5.17.1 → 7.3.2
+[2025-09-10T19:10:45.093Z]     Reason: Installing dependencies
+[2025-09-10T19:10:45.093Z]   @azure/msal-browser: 3.28.1 → 4.22.1
+[2025-09-10T19:10:45.093Z]     Reason: Installing dependencies
+[2025-09-10T19:10:45.093Z]   @azure/msal-react: 2.2.0 → 3.0.19
+[2025-09-10T19:10:45.093Z]     Reason: Azure MSAL ecosystem upgrade required - coordinated upgrade needed
+[2025-09-10T19:10:45.093Z]   eslint: 8.57.1 → 9.35.0
+[2025-09-10T19:10:45.093Z]     Reason: Installing dependencies
+[2025-09-10T19:10:45.093Z]   @typescript-eslint/eslint-plugin: 5.62.0 → 8.43.0
+[2025-09-10T19:10:45.093Z]     Reason: Peer dependency conflict detected - manual intervention required
+[2025-09-10T19:10:45.093Z]   @typescript-eslint/parser: 5.62.0 → 8.43.0
+[2025-09-10T19:10:45.093Z]     Reason: Installing dependencies
+[2025-09-10T19:10:45.093Z]   @types/react: 18.3.23 → 19.1.12
+[2025-09-10T19:10:45.093Z]     Reason: Material UI ecosystem upgrade required - coordinated upgrade needed
+[2025-09-10T19:10:45.093Z]   @types/react-dom: 18.3.7 → 19.1.9
+[2025-09-10T19:10:45.093Z]     Reason: React types ecosystem upgrade required - coordinated upgrade needed
+[2025-09-10T19:10:45.093Z]   @types/jest: 29.5.14 → 30.0.0
+[2025-09-10T19:10:45.093Z]     Reason: Running tests
+[2025-09-10T19:10:45.093Z]   @mui/icons-material: 5.17.1 → 7.3.2
+[2025-09-10T19:10:45.093Z]     Reason: Material UI ecosystem upgrade required - coordinated upgrade needed
+[2025-09-10T19:10:45.093Z]   @mui/lab: 5.0.0-alpha.176 → 7.0.0-beta.17
+[2025-09-10T19:10:45.093Z]     Reason: Material UI ecosystem upgrade required - coordinated upgrade needed
+[2025-09-10T19:10:45.093Z]   @microsoft/applicationinsights-react-js: 17.3.6 → 19.3.7
+[2025-09-10T19:10:45.093Z]     Reason: Peer dependency conflict detected - manual intervention required
+[2025-09-10T19:10:45.093Z]   @mui/x-data-grid: 6.20.4 → 8.11.1
+[2025-09-10T19:10:45.093Z]     Reason: Type checking
+[2025-09-10T19:10:45.093Z]   react-router-dom: 6.30.1 → 7.8.2
+[2025-09-10T19:10:45.093Z]     Reason: Running tests
+[2025-09-10T19:10:45.093Z]   web-vitals: 2.1.4 → 5.1.0
+[2025-09-10T19:10:45.093Z]     Reason: Type checking
+[2025-09-10T19:10:45.093Z] 
+💡 RECOMMENDATIONS:
+[2025-09-10T19:10:45.093Z]   • Plan coordinated ecosystem upgrades for conflicted packages
+[2025-09-10T19:10:45.093Z]   • Consider grouping React, Material UI, or MSAL packages together
+[2025-09-10T19:10:45.093Z]   • Review peer dependency requirements for major version planning
+[2025-09-10T19:10:45.093Z] 
+🎉 Package upgrade completed! 12 packages upgraded successfully.
+[2025-09-10T19:10:45.093Z] ⚠️  18 packages had conflicts (peer dependencies or build issues) - this is normal.
