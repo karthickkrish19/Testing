@@ -1,0 +1,681 @@
+FAIL src/pages/clientConfiguration/__tests__/SchedulerPopUp.test.tsx
+  ● Test suite failed to run
+
+    Cannot find module 'react-router-dom' from 'src/pages/clientConfiguration/__tests__/SchedulerPopUp.test.tsx'
+
+      1 | import { render, screen } from '@testing-library/react';
+    > 2 | import { MemoryRouter, Route, Routes } from 'react-router-dom';
+        | ^
+      3 | import SchedulerPopUp from '../SchedulerPopUp';
+      4 | import { ClientConfig } from '../types';
+      5 |
+
+      at Resolver.resolveModule (node_modules/jest-resolve/build/resolver.js:324:11)
+      at Object.<anonymous> (src/pages/clientConfiguration/__tests__/SchedulerPopUp.test.tsx:2:1)
+
+FAIL src/components/application/__tests__/SidebarOptions.test.tsx
+  ● Test suite failed to run
+
+    Cannot find module 'react-router-dom' from 'src/components/application/__tests__/SidebarOptions.test.tsx'
+
+       6 | jest.mock('axios');
+       7 |
+    >  8 | jest.mock('react-router-dom', () => ({
+         |      ^
+       9 |   ...jest.requireActual('react-router-dom'),
+      10 |   useLocation: () => ({
+      11 |     pathname: '/dialer/dashboard',
+
+      at Resolver.resolveModule (node_modules/jest-resolve/build/resolver.js:324:11)
+      at Object.<anonymous> (src/components/application/__tests__/SidebarOptions.test.tsx:8:6)
+
+FAIL src/pages/clientConfiguration/__tests__/EditClientConfig.test.tsx
+  ● Test suite failed to run
+
+    Cannot find module 'react-router-dom' from 'src/pages/clientConfiguration/__tests__/EditClientConfig.test.tsx'
+
+      1 | import { render, screen, waitFor } from '@testing-library/react';
+    > 2 | import { MemoryRouter, Route, Routes } from 'react-router-dom';
+        | ^
+      3 | import EditClientConfig from '../EditClientConfig';
+      4 | import { ClientConfig } from '../types';
+      5 |
+
+      at Resolver.resolveModule (node_modules/jest-resolve/build/resolver.js:324:11)
+      at Object.<anonymous> (src/pages/clientConfiguration/__tests__/EditClientConfig.test.tsx:2:1)
+
+FAIL src/pages/rreidLookup/__tests__/RreidLookupPopUp.test.tsx
+  ● Test suite failed to run
+
+    Cannot find module 'react-router-dom' from 'src/pages/rreidLookup/__tests__/RreidLookupPopUp.test.tsx'
+
+      1 | import { fireEvent, render, screen } from '@testing-library/react';
+    > 2 | import { MemoryRouter, Route, Routes } from 'react-router-dom';
+        | ^
+      3 | import { RreidLookupDTO } from '../types';
+      4 | import RreidLookupPopUp from '../RreidLookupPopUp';
+      5 | import TextField from '../../../components/common/TextField';
+
+      at Resolver.resolveModule (node_modules/jest-resolve/build/resolver.js:324:11)
+      at Object.<anonymous> (src/pages/rreidLookup/__tests__/RreidLookupPopUp.test.tsx:2:1)
+
+FAIL src/pages/ivr/__tests__/IVRList.test.tsx
+  ● Test suite failed to run
+
+    Cannot find module 'react-router-dom' from 'src/pages/ivr/__tests__/IVRList.test.tsx'
+
+      1 | import { render, screen, waitFor } from '@testing-library/react';
+    > 2 | import { BrowserRouter } from 'react-router-dom';
+        | ^
+      3 | import IVRList from '../IVRList';
+      4 | import axios from 'axios';
+      5 |
+
+      at Resolver.resolveModule (node_modules/jest-resolve/build/resolver.js:324:11)
+      at Object.<anonymous> (src/pages/ivr/__tests__/IVRList.test.tsx:2:1)
+
+FAIL src/components/application/__tests__/Header.test.tsx
+  ● Test suite failed to run
+
+    Cannot find module 'react-router-dom' from 'src/components/application/__tests__/Header.test.tsx'
+
+    > 1 | import { MemoryRouter } from 'react-router-dom';
+        | ^
+      2 | import Header from '../Header';
+      3 | import { render, screen } from '@testing-library/react';
+      4 |
+
+      at Resolver.resolveModule (node_modules/jest-resolve/build/resolver.js:324:11)
+      at Object.<anonymous> (src/components/application/__tests__/Header.test.tsx:1:1)
+
+FAIL src/pages/memberTimeline/__tests__/MemberTimelineLogs.test.tsx
+  ● Test suite failed to run
+
+    Cannot find module 'react-router-dom' from 'src/providers/useAppProvider.tsx'
+
+    Require stack:
+      src/providers/useAppProvider.tsx
+      src/pages/memberTimeline/useMember.ts
+      src/pages/memberTimeline/MemberTimelineLogs.tsx
+      src/pages/memberTimeline/__tests__/MemberTimelineLogs.test.tsx
+
+      1 | import { ThemeProvider, StyledEngineProvider } from '@mui/material';
+      2 | import React, { createContext, FC, ReactNode, useContext } from 'react';
+    > 3 | import { BrowserRouter } from 'react-router-dom';
+        | ^
+      4 | import MaterialUIOptum, { ThemeType } from '../configuration/theme/Material-ui.optum';
+      5 | import useTheme from '../configuration/theme/useTheme';
+      6 | import packageJSON from '../../package.json';
+
+      at Resolver.resolveModule (node_modules/jest-resolve/build/resolver.js:324:11)
+      at Object.<anonymous> (src/providers/useAppProvider.tsx:3:1)
+      at Object.<anonymous> (src/pages/memberTimeline/useMember.ts:2:1)
+      at Object.<anonymous> (src/pages/memberTimeline/MemberTimelineLogs.tsx:2:1)
+      at Object.<anonymous> (src/pages/memberTimeline/__tests__/MemberTimelineLogs.test.tsx:2:1)
+
+FAIL src/pages/rreidLookup/__tests__/RreidLookupList.test.tsx
+  ● Test suite failed to run
+
+    Cannot find module 'react-router-dom' from 'src/providers/useAppProvider.tsx'
+
+    Require stack:
+      src/providers/useAppProvider.tsx
+      src/pages/rreidLookup/useRreidLookupList.ts
+      src/pages/rreidLookup/RreidLookupList.tsx
+      src/pages/rreidLookup/__tests__/RreidLookupList.test.tsx
+
+      1 | import { ThemeProvider, StyledEngineProvider } from '@mui/material';
+      2 | import React, { createContext, FC, ReactNode, useContext } from 'react';
+    > 3 | import { BrowserRouter } from 'react-router-dom';
+        | ^
+      4 | import MaterialUIOptum, { ThemeType } from '../configuration/theme/Material-ui.optum';
+      5 | import useTheme from '../configuration/theme/useTheme';
+      6 | import packageJSON from '../../package.json';
+
+      at Resolver.resolveModule (node_modules/jest-resolve/build/resolver.js:324:11)
+      at Object.<anonymous> (src/providers/useAppProvider.tsx:3:1)
+      at Object.<anonymous> (src/pages/rreidLookup/useRreidLookupList.ts:1:1)
+      at Object.<anonymous> (src/pages/rreidLookup/RreidLookupList.tsx:7:1)
+      at Object.<anonymous> (src/pages/rreidLookup/__tests__/RreidLookupList.test.tsx:2:1)
+
+FAIL src/pages/clientConfiguration/__tests__/ClientConfigList.test.tsx
+  ● Test suite failed to run
+
+    Cannot find module 'react-router-dom' from 'src/providers/useAppProvider.tsx'
+
+    Require stack:
+      src/providers/useAppProvider.tsx
+      src/pages/clientConfiguration/useClientConfigList.ts
+      src/pages/clientConfiguration/ClientConfigList.tsx
+      src/pages/clientConfiguration/__tests__/ClientConfigList.test.tsx
+
+      1 | import { ThemeProvider, StyledEngineProvider } from '@mui/material';
+      2 | import React, { createContext, FC, ReactNode, useContext } from 'react';
+    > 3 | import { BrowserRouter } from 'react-router-dom';
+        | ^
+      4 | import MaterialUIOptum, { ThemeType } from '../configuration/theme/Material-ui.optum';
+      5 | import useTheme from '../configuration/theme/useTheme';
+      6 | import packageJSON from '../../package.json';
+
+      at Resolver.resolveModule (node_modules/jest-resolve/build/resolver.js:324:11)
+      at Object.<anonymous> (src/providers/useAppProvider.tsx:3:1)
+      at Object.<anonymous> (src/pages/clientConfiguration/useClientConfigList.ts:1:1)
+      at Object.<anonymous> (src/pages/clientConfiguration/ClientConfigList.tsx:7:1)
+      at Object.<anonymous> (src/pages/clientConfiguration/__tests__/ClientConfigList.test.tsx:2:1)
+
+FAIL src/pages/memberTimeline/__tests__/BusinessEventsComponent.test.tsx
+  ● Test suite failed to run
+
+    Cannot find module 'react-router-dom' from 'src/providers/useAppProvider.tsx'
+
+    Require stack:
+      src/providers/useAppProvider.tsx
+      src/pages/memberTimeline/useBusinessEvents.ts
+      src/pages/memberTimeline/BusinessEventsComponent.tsx
+      src/pages/memberTimeline/__tests__/BusinessEventsComponent.test.tsx
+
+      1 | import { ThemeProvider, StyledEngineProvider } from '@mui/material';
+      2 | import React, { createContext, FC, ReactNode, useContext } from 'react';
+    > 3 | import { BrowserRouter } from 'react-router-dom';
+        | ^
+      4 | import MaterialUIOptum, { ThemeType } from '../configuration/theme/Material-ui.optum';
+      5 | import useTheme from '../configuration/theme/useTheme';
+      6 | import packageJSON from '../../package.json';
+
+      at Resolver.resolveModule (node_modules/jest-resolve/build/resolver.js:324:11)
+      at Object.<anonymous> (src/providers/useAppProvider.tsx:3:1)
+      at Object.<anonymous> (src/pages/memberTimeline/useBusinessEvents.ts:2:1)
+      at Object.<anonymous> (src/pages/memberTimeline/BusinessEventsComponent.tsx:6:1)
+      at Object.<anonymous> (src/pages/memberTimeline/__tests__/BusinessEventsComponent.test.tsx:3:1)
+
+FAIL src/pages/memberTimeline/__tests__/MemberGridDetails.test.tsx
+  ● Test suite failed to run
+
+    Cannot find module 'react-router-dom' from 'src/providers/useAppProvider.tsx'
+
+    Require stack:
+      src/providers/useAppProvider.tsx
+      src/pages/memberTimeline/useBusinessEvents.ts
+      src/pages/memberTimeline/BusinessEventsComponent.tsx
+      src/pages/memberTimeline/MemberGridDetails.tsx
+      src/pages/memberTimeline/__tests__/MemberGridDetails.test.tsx
+
+      1 | import { ThemeProvider, StyledEngineProvider } from '@mui/material';
+      2 | import React, { createContext, FC, ReactNode, useContext } from 'react';
+    > 3 | import { BrowserRouter } from 'react-router-dom';
+        | ^
+      4 | import MaterialUIOptum, { ThemeType } from '../configuration/theme/Material-ui.optum';
+      5 | import useTheme from '../configuration/theme/useTheme';
+      6 | import packageJSON from '../../package.json';
+
+      at Resolver.resolveModule (node_modules/jest-resolve/build/resolver.js:324:11)
+      at Object.<anonymous> (src/providers/useAppProvider.tsx:3:1)
+      at Object.<anonymous> (src/pages/memberTimeline/useBusinessEvents.ts:2:1)
+      at Object.<anonymous> (src/pages/memberTimeline/BusinessEventsComponent.tsx:6:1)
+      at Object.<anonymous> (src/pages/memberTimeline/MemberGridDetails.tsx:13:1)
+      at Object.<anonymous> (src/pages/memberTimeline/__tests__/MemberGridDetails.test.tsx:2:1)
+
+FAIL src/pages/memberTimeline/searchform/__tests__/MemberLogSearchForm.test.tsx
+  ● Test suite failed to run
+
+    Cannot find module 'react-router-dom' from 'src/providers/useAppProvider.tsx'
+
+    Require stack:
+      src/providers/useAppProvider.tsx
+      src/pages/memberTimeline/searchform/useClientConsumer.ts
+      src/pages/memberTimeline/searchform/ConsumerField.tsx
+      src/pages/memberTimeline/searchform/MemberLogSearchForm.tsx
+      src/pages/memberTimeline/searchform/__tests__/MemberLogSearchForm.test.tsx
+
+      1 | import { ThemeProvider, StyledEngineProvider } from '@mui/material';
+      2 | import React, { createContext, FC, ReactNode, useContext } from 'react';
+    > 3 | import { BrowserRouter } from 'react-router-dom';
+        | ^
+      4 | import MaterialUIOptum, { ThemeType } from '../configuration/theme/Material-ui.optum';
+      5 | import useTheme from '../configuration/theme/useTheme';
+      6 | import packageJSON from '../../package.json';
+
+      at Resolver.resolveModule (node_modules/jest-resolve/build/resolver.js:324:11)
+      at Object.<anonymous> (src/providers/useAppProvider.tsx:3:1)
+      at Object.<anonymous> (src/pages/memberTimeline/searchform/useClientConsumer.ts:2:1)
+      at Object.<anonymous> (src/pages/memberTimeline/searchform/ConsumerField.tsx:5:1)
+      at Object.<anonymous> (src/pages/memberTimeline/searchform/MemberLogSearchForm.tsx:9:1)
+      at Object.<anonymous> (src/pages/memberTimeline/searchform/__tests__/MemberLogSearchForm.test.tsx:2:1)
+
+FAIL src/pages/clientDistributions/__tests__/DialerDistributionManager.test.tsx
+  ● Test suite failed to run
+
+    Cannot find module 'react-router-dom' from 'src/providers/useAppProvider.tsx'
+
+    Require stack:
+      src/providers/useAppProvider.tsx
+      src/pages/clientDistributions/useClientDistributionList.ts
+      src/pages/clientDistributions/DialerDistributionManager.tsx
+      src/pages/clientDistributions/__tests__/DialerDistributionManager.test.tsx
+
+      1 | import { ThemeProvider, StyledEngineProvider } from '@mui/material';
+      2 | import React, { createContext, FC, ReactNode, useContext } from 'react';
+    > 3 | import { BrowserRouter } from 'react-router-dom';
+        | ^
+      4 | import MaterialUIOptum, { ThemeType } from '../configuration/theme/Material-ui.optum';
+      5 | import useTheme from '../configuration/theme/useTheme';
+      6 | import packageJSON from '../../package.json';
+
+      at Resolver.resolveModule (node_modules/jest-resolve/build/resolver.js:324:11)
+      at Object.<anonymous> (src/providers/useAppProvider.tsx:3:1)
+      at Object.<anonymous> (src/pages/clientDistributions/useClientDistributionList.ts:1:1)
+      at Object.<anonymous> (src/pages/clientDistributions/DialerDistributionManager.tsx:6:1)
+      at Object.<anonymous> (src/pages/clientDistributions/__tests__/DialerDistributionManager.test.tsx:2:1)
+
+FAIL src/pages/memberTimeline/searchform/__tests__/clientField.test.tsx
+  ● Test suite failed to run
+
+    Cannot find module 'react-router-dom' from 'src/providers/useAppProvider.tsx'
+
+    Require stack:
+      src/providers/useAppProvider.tsx
+      src/pages/memberTimeline/searchform/useClientConsumer.ts
+      src/pages/memberTimeline/searchform/clientField.tsx
+      src/pages/memberTimeline/searchform/__tests__/clientField.test.tsx
+
+      1 | import { ThemeProvider, StyledEngineProvider } from '@mui/material';
+      2 | import React, { createContext, FC, ReactNode, useContext } from 'react';
+    > 3 | import { BrowserRouter } from 'react-router-dom';
+        | ^
+      4 | import MaterialUIOptum, { ThemeType } from '../configuration/theme/Material-ui.optum';
+      5 | import useTheme from '../configuration/theme/useTheme';
+      6 | import packageJSON from '../../package.json';
+
+      at Resolver.resolveModule (node_modules/jest-resolve/build/resolver.js:324:11)
+      at Object.<anonymous> (src/providers/useAppProvider.tsx:3:1)
+      at Object.<anonymous> (src/pages/memberTimeline/searchform/useClientConsumer.ts:2:1)
+      at Object.<anonymous> (src/pages/memberTimeline/searchform/clientField.tsx:6:1)
+      at Object.<anonymous> (src/pages/memberTimeline/searchform/__tests__/clientField.test.tsx:2:1)
+
+FAIL src/pages/memberTimeline/__tests__/MemberInformationDetails.test.tsx
+  ● Test suite failed to run
+
+    Cannot find module 'react-router-dom' from 'src/providers/useAppProvider.tsx'
+
+    Require stack:
+      src/providers/useAppProvider.tsx
+      src/pages/memberTimeline/useBusinessEvents.ts
+      src/pages/memberTimeline/BusinessEventsComponent.tsx
+      src/pages/memberTimeline/MemberGridDetails.tsx
+      src/pages/memberTimeline/MemberInformationDetails.tsx
+      src/pages/memberTimeline/__tests__/MemberInformationDetails.test.tsx
+
+      1 | import { ThemeProvider, StyledEngineProvider } from '@mui/material';
+      2 | import React, { createContext, FC, ReactNode, useContext } from 'react';
+    > 3 | import { BrowserRouter } from 'react-router-dom';
+        | ^
+      4 | import MaterialUIOptum, { ThemeType } from '../configuration/theme/Material-ui.optum';
+      5 | import useTheme from '../configuration/theme/useTheme';
+      6 | import packageJSON from '../../package.json';
+
+      at Resolver.resolveModule (node_modules/jest-resolve/build/resolver.js:324:11)
+      at Object.<anonymous> (src/providers/useAppProvider.tsx:3:1)
+      at Object.<anonymous> (src/pages/memberTimeline/useBusinessEvents.ts:2:1)
+      at Object.<anonymous> (src/pages/memberTimeline/BusinessEventsComponent.tsx:6:1)
+      at Object.<anonymous> (src/pages/memberTimeline/MemberGridDetails.tsx:13:1)
+      at Object.<anonymous> (src/pages/memberTimeline/MemberInformationDetails.tsx:4:1)
+      at Object.<anonymous> (src/pages/memberTimeline/__tests__/MemberInformationDetails.test.tsx:2:1)
+
+FAIL src/pages/memberTimeline/__tests__/MemberHeaderComponent.test.tsx
+  ● Test suite failed to run
+
+    Cannot find module 'react-router-dom' from 'src/pages/memberTimeline/__tests__/MemberHeaderComponent.test.tsx'
+
+      1 | import { render, screen } from '@testing-library/react';
+      2 | import MemberHeaderComponent from '../MemberHeaderComponent';
+    > 3 | import { BrowserRouter } from 'react-router-dom';
+        | ^
+      4 | import { mockAbilityMemberDetails } from '../__mocks__/memberInfoMockResponse';
+      5 |
+      6 | describe('<MemberHeaderComponent />', () => {
+
+      at Resolver.resolveModule (node_modules/jest-resolve/build/resolver.js:324:11)
+      at Object.<anonymous> (src/pages/memberTimeline/__tests__/MemberHeaderComponent.test.tsx:3:1)
+
+FAIL src/pages/memberTimeline/__tests__/MemberGridPopUp.test.tsx
+  ● Test suite failed to run
+
+    Cannot find module 'react-router-dom' from 'src/pages/memberTimeline/__tests__/MemberGridPopUp.test.tsx'
+
+      1 | import { render, screen } from '@testing-library/react';
+      2 | import MemberGridPopUp from '../MemberGridPopUp';
+    > 3 | import { BrowserRouter } from 'react-router-dom';
+        | ^
+      4 | import { mockAbilityMemberDetails } from '../__mocks__/memberInfoMockResponse';
+      5 |
+      6 | describe('<MemberGridPopUp />', () => {
+
+      at Resolver.resolveModule (node_modules/jest-resolve/build/resolver.js:324:11)
+      at Object.<anonymous> (src/pages/memberTimeline/__tests__/MemberGridPopUp.test.tsx:3:1)
+
+FAIL src/pages/memberTimeline/searchform/__tests__/ConsumerField.test.tsx
+  ● Test suite failed to run
+
+    Cannot find module 'react-router-dom' from 'src/providers/useAppProvider.tsx'
+
+    Require stack:
+      src/providers/useAppProvider.tsx
+      src/pages/memberTimeline/searchform/useClientConsumer.ts
+      src/pages/memberTimeline/searchform/ConsumerField.tsx
+      src/pages/memberTimeline/searchform/__tests__/ConsumerField.test.tsx
+
+      1 | import { ThemeProvider, StyledEngineProvider } from '@mui/material';
+      2 | import React, { createContext, FC, ReactNode, useContext } from 'react';
+    > 3 | import { BrowserRouter } from 'react-router-dom';
+        | ^
+      4 | import MaterialUIOptum, { ThemeType } from '../configuration/theme/Material-ui.optum';
+      5 | import useTheme from '../configuration/theme/useTheme';
+      6 | import packageJSON from '../../package.json';
+
+      at Resolver.resolveModule (node_modules/jest-resolve/build/resolver.js:324:11)
+      at Object.<anonymous> (src/providers/useAppProvider.tsx:3:1)
+      at Object.<anonymous> (src/pages/memberTimeline/searchform/useClientConsumer.ts:2:1)
+      at Object.<anonymous> (src/pages/memberTimeline/searchform/ConsumerField.tsx:5:1)
+      at Object.<anonymous> (src/pages/memberTimeline/searchform/__tests__/ConsumerField.test.tsx:2:1)
+
+FAIL src/pages/dashboard/__tests__/DialerDashboardIframe.test.tsx
+  ● Test suite failed to run
+
+    Cannot find module 'react-router-dom' from 'src/pages/dashboard/__tests__/DialerDashboardIframe.test.tsx'
+
+      2 | import DialerDashboardIframe from '../DialerDashboardIframe';
+      3 |
+    > 4 | jest.mock('react-router-dom', () => ({
+        |      ^
+      5 |   ...jest.requireActual('react-router-dom'),
+      6 |   useLocation: () => ({
+      7 |     pathname: '/dialer/dashboard',
+
+      at Resolver.resolveModule (node_modules/jest-resolve/build/resolver.js:324:11)
+      at Object.<anonymous> (src/pages/dashboard/__tests__/DialerDashboardIframe.test.tsx:4:6)
+
+FAIL src/pages/memberTimeline/__tests__/ISOResponse.test.tsx
+  ● Test suite failed to run
+
+    Cannot find module 'react-router-dom' from 'src/pages/memberTimeline/__tests__/ISOResponse.test.tsx'
+
+      1 | import { render, screen } from '@testing-library/react';
+      2 | import ISOResponse from '../ISOResponse';
+    > 3 | import { BrowserRouter } from 'react-router-dom';
+        | ^
+      4 | import { mockISOMemberDetails, mockISOVerificationDetails } from '../__mocks__/memberInfoMockResponse';
+      5 |
+      6 | describe('<ISOResponse />', () => {
+
+      at Resolver.resolveModule (node_modules/jest-resolve/build/resolver.js:324:11)
+      at Object.<anonymous> (src/pages/memberTimeline/__tests__/ISOResponse.test.tsx:3:1)
+
+FAIL src/pages/memberTimeline/__tests__/PVerifyResponse.test.tsx
+  ● Test suite failed to run
+
+    Cannot find module 'react-router-dom' from 'src/pages/memberTimeline/__tests__/PVerifyResponse.test.tsx'
+
+      1 | import { render, screen } from '@testing-library/react';
+      2 | import PVerifyResponse from '../PVerifyResponse';
+    > 3 | import { BrowserRouter } from 'react-router-dom';
+        | ^
+      4 | import { mockPVerifyMemberDetails, mockPVerifyMbiVerificationDetails } from '../__mocks__/memberInfoMockResponse';
+      5 |
+      6 | describe('<PVerifyResponse />', () => {
+
+      at Resolver.resolveModule (node_modules/jest-resolve/build/resolver.js:324:11)
+      at Object.<anonymous> (src/pages/memberTimeline/__tests__/PVerifyResponse.test.tsx:3:1)
+
+FAIL src/components/common/__tests__/MyModalComponent.test.tsx
+  ● Test suite failed to run
+
+    Cannot find module 'react-router-dom' from 'src/components/common/__tests__/MyModalComponent.test.tsx'
+
+      1 | import { render, screen } from '@testing-library/react';
+    > 2 | import { MemoryRouter } from 'react-router-dom';
+        | ^
+      3 | import MyModalComponent from '../MyModalComponent';
+      4 |
+      5 | describe('<MyModalComponent />', () => {
+
+      at Resolver.resolveModule (node_modules/jest-resolve/build/resolver.js:324:11)
+      at Object.<anonymous> (src/components/common/__tests__/MyModalComponent.test.tsx:2:1)
+
+FAIL src/pages/memberTimeline/__tests__/MatchSmartResponse.test.tsx
+  ● Test suite failed to run
+
+    Cannot find module 'react-router-dom' from 'src/pages/memberTimeline/__tests__/MatchSmartResponse.test.tsx'
+
+      1 | import { render, screen } from '@testing-library/react';
+      2 | import MatchSmartResponse from '../MatchSmartResponse';
+    > 3 | import { BrowserRouter } from 'react-router-dom';
+        | ^
+      4 | import { mockMatchSmartMemberDetails, mockMatchSmartVerificationDetails } from '../__mocks__/memberInfoMockResponse';
+      5 |
+      6 | describe('<MatchSmartResponse />', () => {
+
+      at Resolver.resolveModule (node_modules/jest-resolve/build/resolver.js:324:11)
+      at Object.<anonymous> (src/pages/memberTimeline/__tests__/MatchSmartResponse.test.tsx:3:1)
+
+FAIL src/components/application/__tests__/Sidebar.test.tsx
+  ● Test suite failed to run
+
+    Cannot find module 'react-router-dom' from 'src/components/application/__tests__/Sidebar.test.tsx'
+
+      1 | import { render, screen } from '@testing-library/react';
+    > 2 | import { MemoryRouter } from 'react-router-dom';
+        | ^
+      3 | import Sidebar from '../../application/Sidebar';
+      4 |
+      5 | describe('<Sidebar />', () => {
+
+      at Resolver.resolveModule (node_modules/jest-resolve/build/resolver.js:324:11)
+      at Object.<anonymous> (src/components/application/__tests__/Sidebar.test.tsx:2:1)
+
+FAIL src/components/application/__tests__/AppRoutes.test.tsx
+  ● Test suite failed to run
+
+    Cannot find module 'react-router-dom' from 'src/components/application/__tests__/AppRoutes.test.tsx'
+
+      1 | import { render } from '@testing-library/react';
+    > 2 | import { MemoryRouter } from 'react-router-dom';
+        | ^
+      3 | import AppRoutes from '../AppRoutes';
+      4 |
+      5 | describe('<AppRoutes />', () => {
+
+      at Resolver.resolveModule (node_modules/jest-resolve/build/resolver.js:324:11)
+      at Object.<anonymous> (src/components/application/__tests__/AppRoutes.test.tsx:2:1)
+
+FAIL src/components/application/__tests__/Body.test.tsx
+  ● Test suite failed to run
+
+    Cannot find module 'react-router-dom' from 'src/components/application/__tests__/Body.test.tsx'
+
+      1 | import { render } from '@testing-library/react';
+    > 2 | import { MemoryRouter } from 'react-router-dom';
+        | ^
+      3 | import Body from '../Body';
+      4 |
+      5 | describe('<Body />', () => {
+
+      at Resolver.resolveModule (node_modules/jest-resolve/build/resolver.js:324:11)
+      at Object.<anonymous> (src/components/application/__tests__/Body.test.tsx:2:1)
+
+FAIL src/pages/memberTimeline/__tests__/ChangeNetworkResponse.test.tsx
+  ● Test suite failed to run
+
+    Cannot find module 'react-router-dom' from 'src/pages/memberTimeline/__tests__/ChangeNetworkResponse.test.tsx'
+
+      1 | import { render, screen } from '@testing-library/react';
+      2 | import ChangeNetworkResponse from '../ChangeNetworkResponse';
+    > 3 | import { BrowserRouter } from 'react-router-dom';
+        | ^
+      4 | import { mockPVerifyMemberDetails, mockChangeNetworkVerificationResponse } from '../__mocks__/memberInfoMockResponse';
+      5 |
+      6 | describe('<ChangeNetworkResponse />', () => {
+
+      at Resolver.resolveModule (node_modules/jest-resolve/build/resolver.js:324:11)
+      at Object.<anonymous> (src/pages/memberTimeline/__tests__/ChangeNetworkResponse.test.tsx:3:1)
+
+FAIL src/pages/memberTimeline/__tests__/AbilityResponse.test.tsx
+  ● Test suite failed to run
+
+    Cannot find module 'react-router-dom' from 'src/pages/memberTimeline/__tests__/AbilityResponse.test.tsx'
+
+      1 | import { render, screen } from '@testing-library/react';
+      2 | import AbilityResponse from '../AbilityResponse';
+    > 3 | import { BrowserRouter } from 'react-router-dom';
+        | ^
+      4 | import { mockAbilityMemberDetails, mockAbilityVerificationDetails } from '../__mocks__/memberInfoMockResponse';
+      5 |
+      6 | describe('<AbilityResponse />', () => {
+
+      at Resolver.resolveModule (node_modules/jest-resolve/build/resolver.js:324:11)
+      at Object.<anonymous> (src/pages/memberTimeline/__tests__/AbilityResponse.test.tsx:3:1)
+
+FAIL src/pages/memberTimeline/__tests__/MarxScrapeResponse.test.tsx
+  ● Test suite failed to run
+
+    Cannot find module 'react-router-dom' from 'src/pages/memberTimeline/__tests__/MarxScrapeResponse.test.tsx'
+
+      1 | import { render, screen } from '@testing-library/react';
+      2 | import MarxScrapeResponse from '../MarxScrapeResponse';
+    > 3 | import { BrowserRouter } from 'react-router-dom';
+        | ^
+      4 | import { mockMarxScrapeMemberDetails, mockMarxScrapeVerificationDetails } from '../__mocks__/memberInfoMockResponse';
+      5 |
+      6 | describe('<MarxScrapeResponse />', () => {
+
+      at Resolver.resolveModule (node_modules/jest-resolve/build/resolver.js:324:11)
+      at Object.<anonymous> (src/pages/memberTimeline/__tests__/MarxScrapeResponse.test.tsx:3:1)
+
+FAIL src/components/application/__tests__/LogOut.test.tsx
+  ● Test suite failed to run
+
+    Cannot find module 'react-router-dom' from 'src/components/application/__tests__/LogOut.test.tsx'
+
+      1 | import { screen, render } from '@testing-library/react';
+    > 2 | import { MemoryRouter } from 'react-router-dom';
+        | ^
+      3 | import LogOut from '../../application/LogOut';
+      4 |
+      5 | describe('<LogOut />', () => {
+
+      at Resolver.resolveModule (node_modules/jest-resolve/build/resolver.js:324:11)
+      at Object.<anonymous> (src/components/application/__tests__/LogOut.test.tsx:2:1)
+
+FAIL src/pages/memberTimeline/__tests__/AutobotResponse.test.tsx
+  ● Test suite failed to run
+
+    Cannot find module 'react-router-dom' from 'src/providers/useAppProvider.tsx'
+
+    Require stack:
+      src/providers/useAppProvider.tsx
+      src/pages/memberTimeline/useAutobotMember.ts
+      src/pages/memberTimeline/AutobotResponse.tsx
+      src/pages/memberTimeline/__tests__/AutobotResponse.test.tsx
+
+      1 | import { ThemeProvider, StyledEngineProvider } from '@mui/material';
+      2 | import React, { createContext, FC, ReactNode, useContext } from 'react';
+    > 3 | import { BrowserRouter } from 'react-router-dom';
+        | ^
+      4 | import MaterialUIOptum, { ThemeType } from '../configuration/theme/Material-ui.optum';
+      5 | import useTheme from '../configuration/theme/useTheme';
+      6 | import packageJSON from '../../package.json';
+
+      at Resolver.resolveModule (node_modules/jest-resolve/build/resolver.js:324:11)
+      at Object.<anonymous> (src/providers/useAppProvider.tsx:3:1)
+      at Object.<anonymous> (src/pages/memberTimeline/useAutobotMember.ts:2:1)
+      at Object.<anonymous> (src/pages/memberTimeline/AutobotResponse.tsx:10:1)
+      at Object.<anonymous> (src/pages/memberTimeline/__tests__/AutobotResponse.test.tsx:2:1)
+
+FAIL src/pages/memberTimeline/__tests__/SorterResponse.test.tsx
+  ● Test suite failed to run
+
+    Cannot find module 'react-router-dom' from 'src/pages/memberTimeline/__tests__/SorterResponse.test.tsx'
+
+      1 | import { render, screen } from '@testing-library/react';
+      2 | import SorterResponse from '../SorterResponse';
+    > 3 | import { BrowserRouter } from 'react-router-dom';
+        | ^
+      4 | import { mockSorterVerficaitonDetails } from '../__mocks__/memberInfoMockResponse';
+      5 |
+      6 | describe('<SorterResponse />', () => {
+
+      at Resolver.resolveModule (node_modules/jest-resolve/build/resolver.js:324:11)
+      at Object.<anonymous> (src/pages/memberTimeline/__tests__/SorterResponse.test.tsx:3:1)
+
+FAIL src/pages/memberTimeline/__tests__/AllVerificationResponses.test.tsx
+  ● Test suite failed to run
+
+    Cannot find module 'react-router-dom' from 'src/providers/useAppProvider.tsx'
+
+    Require stack:
+      src/providers/useAppProvider.tsx
+      src/pages/memberTimeline/useAutobotMember.ts
+      src/pages/memberTimeline/AutobotResponse.tsx
+      src/pages/memberTimeline/AllVerificationResponses.tsx
+      src/pages/memberTimeline/__tests__/AllVerificationResponses.test.tsx
+
+      1 | import { ThemeProvider, StyledEngineProvider } from '@mui/material';
+      2 | import React, { createContext, FC, ReactNode, useContext } from 'react';
+    > 3 | import { BrowserRouter } from 'react-router-dom';
+        | ^
+      4 | import MaterialUIOptum, { ThemeType } from '../configuration/theme/Material-ui.optum';
+      5 | import useTheme from '../configuration/theme/useTheme';
+      6 | import packageJSON from '../../package.json';
+
+      at Resolver.resolveModule (node_modules/jest-resolve/build/resolver.js:324:11)
+      at Object.<anonymous> (src/providers/useAppProvider.tsx:3:1)
+      at Object.<anonymous> (src/pages/memberTimeline/useAutobotMember.ts:2:1)
+      at Object.<anonymous> (src/pages/memberTimeline/AutobotResponse.tsx:10:1)
+      at Object.<anonymous> (src/pages/memberTimeline/AllVerificationResponses.tsx:4:1)
+      at Object.<anonymous> (src/pages/memberTimeline/__tests__/AllVerificationResponses.test.tsx:2:1)
+
+FAIL src/pages/memberTimeline/__tests__/AutobotTimelinePopUp.test.tsx
+  ● Test suite failed to run
+
+    Cannot find module 'react-router-dom' from 'src/pages/memberTimeline/__tests__/AutobotTimelinePopUp.test.tsx'
+
+      1 | import { render, screen } from '@testing-library/react';
+      2 | import AutobotTimelinePopUp from '../AutobotTimelinePopUp';
+    > 3 | import { BrowserRouter } from 'react-router-dom';
+        | ^
+      4 | import { mockAutobotTimelineGridData } from '../__mocks__/memberInfoMockResponse';
+      5 |
+      6 | describe('<AutobotTimelinePopUp />', () => {
+
+      at Resolver.resolveModule (node_modules/jest-resolve/build/resolver.js:324:11)
+      at Object.<anonymous> (src/pages/memberTimeline/__tests__/AutobotTimelinePopUp.test.tsx:3:1)
+
+FAIL src/App.test.tsx
+  ● Test suite failed to run
+
+    Cannot find module 'react-router-dom' from 'src/components/application/Header.tsx'
+
+    Require stack:
+      src/components/application/Header.tsx
+      src/App.tsx
+      src/App.test.tsx
+
+       6 | import IconButton from '../common/IconButton';
+       7 | import UserControlMenu from './UserControlMenu';
+    >  8 | import { useNavigate } from 'react-router-dom';
+         | ^
+       9 | import { AppContext } from '../../providers/useAppProvider';
+      10 | import { useMsal } from '@azure/msal-react';
+      11 | import commons from '../../utils/commons';
+
+      at Resolver.resolveModule (node_modules/jest-resolve/build/resolver.js:324:11)
+      at Object.<anonymous> (src/components/application/Header.tsx:8:1)
+      at Object.<anonymous> (src/App.tsx:3:1)
+      at Object.<anonymous> (src/App.test.tsx:2:1)
+
+
+Test Suites: 35 failed, 14 passed, 49 total
+Tests:       48 passed, 48 total
+Snapshots:   0 total
+Time:        127.1 s
+Ran all test suites.
+Error: Process completed with exit code 1.
