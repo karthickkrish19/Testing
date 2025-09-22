@@ -1,0 +1,477 @@
+ChatGPT said:
+Got it! Here’s the full updated project structure and all complete code files you’ll need for your LLM pipeline from tokenizer training through training and generation — all without third-party tokenizers, just pure Python + PyTorch.
+📁 Project Structure
+my_tokenizer/
+├── input.txt                   # Training corpus (your raw text)
+├── train_tokenizer.py          # BPE tokenizer training and saving vocab/merges/etc
+├── tokenizer_utils.py          # BPETokenizer class with encode/decode
+├── dataset.py                  # TokenizedTextDataset for batching
+├── transformer.py              # GPT Transformer model from scratch
+├── train.py                   # Training loop
+├── generate.py                 # Text generation/inference
+├── test_tokenizer.py           # Simple tokenizer encode/decode test
+├── test_transformer.py         # Transformer model sanity check
+└── output/                     # Tokenizer output files (vocab.json, merges.txt, etc)
+└── model_checkpoints/          # Saved model weights during training
+📄 Full Code Files
+1. train_tokenizer.py
+import os
+import json
+from collections import defaultdict, Counter
+
+# Configs
+VOCAB_SIZE = 50
+INPUT_FILE = "input.txt"
+OUTPUT_DIR = "output"
+SPECIAL_TOKENS = ["<unk>", "<pad>", "<bos>", "<eos>"]
+
+def get_initial_tokens(word):
+    return list(word) + ["</w>"]
+
+def read_corpus(file_path):
+    with open(file_path, "r", encoding="utf-8") as f:
+        lines = f.read().splitlines()
+    corpus = []
+    for line in lines:
+        for word in line.strip().split():
+            corpus.append(get_initial_tokens(word))
+    return corpus
+
+def get_pair_frequencies(corpus):
+    pairs = defaultdict(int)
+    for word in corpus:
+        for i in range(len(word) - 1):
+            pairs[(word[i], word[i + 1])] += 1
+    return pairs
+
+def merge_pair(pair, corpus):
+    merged_corpus = []
+    bigram = ''.join(pair)
+    for word in corpus:
+        new_word = []
+        i = 0
+        while i < len(word):
+            if i < len(word) - 1 and (word[i], word[i + 1]) == pair:
+                new_word.append(bigram)
+                i += 2
+            else:
+                new_word.append(word[i])
+                i += 1
+        merged_corpus.append(new_word)
+    return merged_corpus
+
+def train_bpe(corpus, vocab_size):
+    vocab = Counter(tuple(word) for word in corpus)
+    merges = []
+    token_set = set()
+
+    while len(token_set) < vocab_size:
+        pair_freqs = get_pair_frequencies(corpus)
+        if not pair_freqs:
+            break
+        most_frequent = max(pair_freqs, key=pair_freqs.get)
+        merges.append(most_frequent)
+        corpus = merge_pair(most_frequent, corpus)
+        token_set.update([item for word in corpus for item in word])
+
+    return merges, token_set
+
+def save_vocab(tokens, path):
+    full_vocab = SPECIAL_TOKENS + sorted(tokens)
+    vocab_dict = {token: idx for idx, token in enumerate(full_vocab)}
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(vocab_dict, f, indent=2)
+    return vocab_dict
+
+def save_merges(merges, path):
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("#version: 0.2\n")
+        for pair in merges:
+            f.write(f"{pair[0]} {pair[1]}\n")
+
+def save_tokenizer_json(vocab_dict, merges, path):
+    tokenizer_data = {
+        "version": "0.1",
+        "type": "BPE",
+        "vocab": vocab_dict,
+        "merges": [" ".join(pair) for pair in merges],
+        "special_tokens": SPECIAL_TOKENS
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(tokenizer_data, f, indent=2)
+
+def save_config_files(path_tokenizer_config, path_config):
+    tokenizer_config = {
+        "tokenizer_class": "BPE",
+        "unk_token": "<unk>",
+        "pad_token": "<pad>",
+        "bos_token": "<bos>",
+        "eos_token": "<eos>"
+    }
+    config = {
+        "model_type": "bpe",
+        "vocab_size": VOCAB_SIZE + len(SPECIAL_TOKENS)
+    }
+    with open(path_tokenizer_config, "w", encoding="utf-8") as f:
+        json.dump(tokenizer_config, f, indent=2)
+    with open(path_config, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
+
+def main():
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    corpus = read_corpus(INPUT_FILE)
+    merges, vocab_tokens = train_bpe(corpus, VOCAB_SIZE)
+
+    vocab_path = os.path.join(OUTPUT_DIR, "vocab.json")
+    merges_path = os.path.join(OUTPUT_DIR, "merges.txt")
+    tokenizer_json_path = os.path.join(OUTPUT_DIR, "tokenizer.json")
+    tokenizer_config_path = os.path.join(OUTPUT_DIR, "tokenizer_config.json")
+    config_path = os.path.join(OUTPUT_DIR, "config.json")
+
+    vocab_dict = save_vocab(vocab_tokens, vocab_path)
+    save_merges(merges, merges_path)
+    save_tokenizer_json(vocab_dict, merges, tokenizer_json_path)
+    save_config_files(tokenizer_config_path, config_path)
+
+    print("✅ Tokenizer training complete. Files saved to:", OUTPUT_DIR)
+
+if __name__ == "__main__":
+    main()
+2. tokenizer_utils.py
+import json
+
+class BPETokenizer:
+    def __init__(self, vocab_path, merges_path):
+        with open(vocab_path, 'r', encoding='utf-8') as f:
+            self.vocab = json.load(f)
+        with open(merges_path, 'r', encoding='utf-8') as f:
+            lines = f.read().splitlines()[1:]  # Skip "#version"
+            self.merges = [tuple(line.strip().split()) for line in lines]
+
+        self.bpe_ranks = {pair: i for i, pair in enumerate(self.merges)}
+        self.token_to_id = self.vocab
+        self.id_to_token = {v: k for k, v in self.vocab.items()}
+
+        self.unk_token = "<unk>"
+        self.pad_token = "<pad>"
+        self.bos_token = "<bos>"
+        self.eos_token = "<eos>"
+
+    def _get_initial_tokens(self, word):
+        return list(word) + ["</w>"]
+
+    def _apply_merges(self, tokens):
+        while True:
+            pairs = [(tokens[i], tokens[i + 1]) for i in range(len(tokens) - 1)]
+            ranked = [(pair, self.bpe_ranks.get(pair, float('inf'))) for pair in pairs]
+            if not ranked:
+                break
+            best_pair, rank = min(ranked, key=lambda x: x[1])
+            if rank == float('inf'):
+                break
+
+            new_tokens = []
+            i = 0
+            while i < len(tokens):
+                if i < len(tokens) - 1 and (tokens[i], tokens[i + 1]) == best_pair:
+                    new_tokens.append(''.join(best_pair))
+                    i += 2
+                else:
+                    new_tokens.append(tokens[i])
+                    i += 1
+            tokens = new_tokens
+        return tokens
+
+    def encode(self, text, add_special_tokens=True):
+        token_ids = []
+        if add_special_tokens:
+            token_ids.append(self.token_to_id[self.bos_token])
+
+        for word in text.strip().split():
+            chars = self._get_initial_tokens(word)
+            bpe_tokens = self._apply_merges(chars)
+            for token in bpe_tokens:
+                token_id = self.token_to_id.get(token, self.token_to_id[self.unk_token])
+                token_ids.append(token_id)
+
+        if add_special_tokens:
+            token_ids.append(self.token_to_id[self.eos_token])
+        return token_ids
+
+    def decode(self, token_ids, skip_special_tokens=True):
+        tokens = [self.id_to_token[tid] for tid in token_ids if tid in self.id_to_token]
+
+        if skip_special_tokens:
+            tokens = [t for t in tokens if t not in {
+                self.unk_token, self.pad_token, self.bos_token, self.eos_token
+            }]
+
+        words = []
+        current_word = ''
+        for token in tokens:
+            if token.endswith('</w>'):
+                current_word += token[:-4]
+                words.append(current_word)
+                current_word = ''
+            else:
+                current_word += token
+        if current_word:
+            words.append(current_word)
+        return ' '.join(words)
+3. dataset.py
+import torch
+from torch.utils.data import Dataset
+
+class TokenizedTextDataset(Dataset):
+    def __init__(self, tokenizer, filepath, block_size=32):
+        self.tokenizer = tokenizer
+        self.block_size = block_size
+        
+        with open(filepath, 'r', encoding='utf-8') as f:
+            text = f.read()
+        
+        token_ids = tokenizer.encode(text, add_special_tokens=True)
+        
+        self.examples = []
+        for i in range(0, len(token_ids) - block_size, block_size):
+            chunk = token_ids[i:i+block_size]
+            self.examples.append(torch.tensor(chunk, dtype=torch.long))
+    
+    def __len__(self):
+        return len(self.examples)
+    
+    def __getitem__(self, idx):
+        return self.examples[idx]
+4. transformer.py
+import torch
+import torch.nn as nn
+import math
+
+class GPTConfig:
+    def __init__(self, vocab_size, block_size=32, n_layer=2, n_head=2, n_embd=128):
+        self.vocab_size = vocab_size
+        self.block_size = block_size
+        self.n_layer = n_layer
+        self.n_head = n_head
+        self.n_embd = n_embd
+
+class CausalSelfAttention(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        assert config.n_embd % config.n_head == 0
+        self.n_head = config.n_head
+        self.head_dim = config.n_embd // config.n_head
+        self.query = nn.Linear(config.n_embd, config.n_embd)
+        self.key = nn.Linear(config.n_embd, config.n_embd)
+        self.value = nn.Linear(config.n_embd, config.n_embd)
+        self.register_buffer("mask", torch.tril(torch.ones(config.block_size, config.block_size)).unsqueeze(0).unsqueeze(0))
+        self.dropout = nn.Dropout(0.1)
+    
+    def forward(self, x):
+        B, T, C = x.size()
+        q = self.query(x).view(B, T, self.n_head, self.head_dim).transpose(1,2)  # (B, nh, T, hs)
+        k = self.key(x).view(B, T, self.n_head, self.head_dim).transpose(1,2)
+        v = self.value(x).view(B, T, self.n_head, self.head_dim).transpose(1,2)
+        
+        att = (q @ k.transpose(-2,-1)) / math.sqrt(self.head_dim)
+        att = att.masked_fill(self.mask[:,:,:T,:T] == 0, float('-inf'))
+        att = torch.softmax(att, dim=-1)
+        att = self.dropout(att)
+        
+        y = att @ v
+        y = y.transpose(1,2).contiguous().view(B, T, C)
+        return y
+
+class FeedForward(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(config.n_embd, 4 * config.n_embd),
+            nn.GELU(),
+            nn.Linear(4 * config.n_embd, config.n_embd),
+            nn.Dropout(0.1)
+        )
+    def forward(self, x):
+        return self.net(x)
+
+class Block(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.sa = CausalSelfAttention(config)
+        self.ffwd = FeedForward(config)
+        self.ln1 = nn.LayerNorm(config.n_embd)
+        self.ln2 = nn.LayerNorm(config.n_embd)
+    
+    def forward(self, x):
+        x = x + self.sa(self.ln1(x))
+        x = x + self.ffwd(self.ln2(x))
+        return x
+
+class GPT(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.token_embedding_table = nn.Embedding(config.vocab_size, config.n_embd)
+        self.position_embedding_table = nn.Embedding(config.block_size, config.n_embd)
+        self.blocks = nn.Sequential(*[Block(config) for _ in range(config.n_layer)])
+        self.ln_f = nn.LayerNorm(config.n_embd)
+        self.head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+    
+    def forward(self, idx, targets=None):
+        B, T = idx.size()
+        assert T <= self.config.block_size, "Sequence too long!"
+        tok_emb = self.token_embedding_table(idx)
+        pos_emb = self.position_embedding_table(torch.arange(T, device=idx.device))
+        x = tok_emb + pos_emb
+        x = self.blocks(x)
+        x = self.ln_f(x)
+        logits = self.head(x)
+        
+        loss = None
+        if targets is not None:
+            loss = nn.functional.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+        return logits, loss
+    
+    @torch.no_grad()
+    def generate(self, idx, max_new_tokens):
+        for _ in range(max_new_tokens):
+            idx_cond = idx[:, -self.config.block_size:]
+            logits, _ = self(idx_cond)
+            logits = logits[:, -1, :]
+            probs = torch.softmax(logits, dim=-1)
+            next_token = torch.multinomial(probs, num_samples=1)
+            idx = torch.cat((idx, next_token), dim=1)
+        return idx
+5. train.py
+import os
+import torch
+from torch.utils.data import DataLoader
+from tokenizer_utils import BPETokenizer
+from dataset import TokenizedTextDataset
+from transformer import GPT, GPTConfig
+
+VOCAB_PATH = "output/vocab.json"
+MERGES_PATH = "output/merges.txt"
+CORPUS_PATH = "input.txt"
+CHECKPOINT_DIR = "model_checkpoints"
+BLOCK_SIZE = 32
+BATCH_SIZE = 16
+EPOCHS = 10
+LEARNING_RATE = 3e-4
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+def main():
+    os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+
+    tokenizer = BPETokenizer(VOCAB_PATH, MERGES_PATH)
+    dataset = TokenizedTextDataset(tokenizer, CORPUS_PATH, block_size=BLOCK_SIZE)
+    dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
+
+    vocab_size = len(tokenizer.vocab)
+    config = GPTConfig(vocab_size=vocab_size, block_size=BLOCK_SIZE, n_layer=2, n_head=2, n_embd=128)
+    model = GPT(config).to(DEVICE)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
+
+    for epoch in range(1, EPOCHS + 1):
+        model.train()
+        total_loss = 0
+        for batch in dataloader:
+            batch = batch.to(DEVICE)
+            inputs = batch[:, :-1]
+            targets = batch[:, 1:]
+
+            optimizer.zero_grad()
+            logits, loss = model(inputs, targets)
+            loss.backward()
+            optimizer.step()
+
+            total_loss += loss.item()
+
+        avg_loss = total_loss / len(dataloader)
+        print(f"Epoch {epoch} - Loss: {avg_loss:.4f}")
+
+        checkpoint_path = os.path.join(CHECKPOINT_DIR, f"model_epoch_{epoch}.pt")
+        torch.save(model.state_dict(), checkpoint_path)
+        print(f"Saved checkpoint: {checkpoint_path}")
+
+if __name__ == "__main__":
+    main()
+6. generate.py
+import torch
+from tokenizer_utils import BPETokenizer
+from transformer import GPT, GPTConfig
+
+VOCAB_PATH = "output/vocab.json"
+MERGES_PATH = "output/merges.txt"
+CHECKPOINT_PATH = "model_checkpoints/model_epoch_10.pt"  # Update if needed
+BLOCK_SIZE = 32
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+def generate_text(prompt, max_new_tokens=50):
+    tokenizer = BPETokenizer(VOCAB_PATH, MERGES_PATH)
+    
+    vocab_size = len(tokenizer.vocab)
+    config = GPTConfig(vocab_size=vocab_size, block_size=BLOCK_SIZE, n_layer=2, n_head=2, n_embd=128)
+    model = GPT(config).to(DEVICE)
+    model.load_state_dict(torch.load(CHECKPOINT_PATH, map_location=DEVICE))
+    model.eval()
+    
+    input_ids = tokenizer.encode(prompt, add_special_tokens=True)
+    input_tensor = torch.tensor(input_ids, dtype=torch.long, device=DEVICE).unsqueeze(0)
+
+    with torch.no_grad():
+        generated_ids = model.generate(input_tensor, max_new_tokens=max_new_tokens)
+
+    output_text = tokenizer.decode(generated_ids[0].tolist())
+    return output_text
+
+if __name__ == "__main__":
+    prompt = "hello"
+    generated_text = generate_text(prompt)
+    print("=== Generated Text ===")
+    print(generated_text)
+7. test_tokenizer.py
+from tokenizer_utils import BPETokenizer
+
+tokenizer = BPETokenizer("output/vocab.json", "output/merges.txt")
+
+text = "hello again"
+encoded = tokenizer.encode(text)
+print("Encoded:", encoded)
+
+decoded = tokenizer.decode(encoded)
+print("Decoded:", decoded)
+8. test_transformer.py
+import torch
+from transformer import GPT, GPTConfig
+
+def test():
+    vocab_size = 100
+    block_size = 16
+    batch_size = 4
+    config = GPTConfig(vocab_size=vocab_size, block_size=block_size, n_layer=2, n_head=2, n_embd=64)
+    model = GPT(config)
+
+    dummy_input = torch.randint(0, vocab_size, (batch_size, block_size))
+    logits, loss = model(dummy_input, dummy_input)
+    print("Logits shape:", logits.shape)
+    print("Loss:", loss.item())
+
+if __name__ == "__main__":
+    test()
+🚀 How to Run Everything
+Train Tokenizer
+python train_tokenizer.py
+Test Tokenizer
+python test_tokenizer.py
+Train Model
+python train.py
+Generate Text
+python generate.py
+✨ Notes
+The vocab size in tokenizer training (VOCAB_SIZE = 50) is small for demonstration; increase for better models.
+Adjust GPT model size in GPTConfig (layers, heads, embedding size) based on your hardware.
+Use a bigger corpus (input.txt) for better results.
+Generation uses simple multinomial sampling; you can improve with temperature, top-k, or top-p sampling.
+If you want, I can also help with sampling improvements, training tips, or scaling up next
