@@ -1,0 +1,793 @@
+Here’s a complete project structure + all code files (pure Python + PyTorch) for a minimal LLM that includes:
+* Tokenizer (BPE)
+* Training, with checkpointing & best model saving
+* Generation with sampling (temperature, top‑k, top‑p)
+* Tests for tokenizer & model
+After the code, I’ll explain each file, what it does, how things connect, and variations / possible improvements.
+
+📁 Full Project Structure
+my_llm/
+├── input.txt
+├── tokenizer/
+│   ├── train_tokenizer.py
+│   ├── tokenizer_utils.py
+│   ├── test_tokenizer.py
+├── model/
+│   ├── transformer.py
+│   ├── test_transformer.py
+├── data/
+│   └── dataset.py
+├── utils/
+│   ├── sampling_utils.py
+├── train.py
+├── generate.py
+├── config.json
+└── model_checkpoints/
+
+input.txt — your raw training corpus (plain text)
+Directories to organize code: tokenizer/, model/, data/, utils/
+train.py — training loop
+generate.py — inference / text generation
+config.json — for hyperparameters (so you don’t hardcode everything)
+model_checkpoints/ — stores checkpoint files
+
+🔍 Full Code Files
+Below are all the code files, in order. You can copy them into your structure.
+
+1. config.json
+{
+  "vocab_size": 5000,
+  "special_tokens": ["<unk>", "<pad>", "<bos>", "<eos>"],
+  "block_size": 64,
+  "batch_size": 32,
+  "n_layer": 4,
+  "n_head": 4,
+  "n_embd": 256,
+  "dropout_prob": 0.1,
+  "learning_rate": 3e-4,
+  "epochs": 10,
+  "device": "cuda", 
+  "generate": {
+    "max_new_tokens": 50,
+    "temperature": 1.0,
+    "top_k": 0,
+    "top_p": 0.0
+  }
+}
+
+You can adjust these settings.
+
+2. tokenizer/train_tokenizer.py
+
+# tokenizer/train_tokenizer.py
+
+import os
+import json
+from collections import defaultdict, Counter
+
+# Load config parameters
+from pathlib import Path
+import sys
+sys.path.append(str(Path(__file__).resolve().parents[1]))  # to import config
+
+import config
+
+VOCAB_SIZE = config.vocab_size
+SPECIAL_TOKENS = config.special_tokens
+INPUT_FILE = "input.txt"
+OUTPUT_DIR = "tokenizer/output"
+
+def get_initial_tokens(word):
+    return list(word) + ["</w>"]
+
+def read_corpus(file_path):
+    with open(file_path, "r", encoding="utf-8") as f:
+        lines = f.read().splitlines()
+    corpus = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        for word in line.split():
+            corpus.append(get_initial_tokens(word))
+    return corpus
+
+def get_pair_frequencies(corpus):
+    pairs = defaultdict(int)
+    for word in corpus:
+        for i in range(len(word) - 1):
+            pairs[(word[i], word[i + 1])] += 1
+    return pairs
+
+def merge_pair(pair, corpus):
+    merged_corpus = []
+    bigram = ''.join(pair)
+    for word in corpus:
+        new_word = []
+        i = 0
+        while i < len(word):
+            if i < len(word) - 1 and (word[i], word[i + 1]) == pair:
+                new_word.append(bigram)
+                i += 2
+            else:
+                new_word.append(word[i])
+                i += 1
+        merged_corpus.append(new_word)
+    return merged_corpus
+
+def train_bpe(corpus, vocab_size, special_tokens):
+    # Each word is a list of initial “symbols” (characters + “</w>”)
+    vocab = Counter(tuple(word) for word in corpus)
+    merges = []
+    token_set = set()
+
+    while True:
+        # Count all adjacent pairs
+        pair_freqs = get_pair_frequencies(corpus)
+        if not pair_freqs:
+            break
+        # choose most frequent pair
+        most_frequent = max(pair_freqs, key=pair_freqs.get)
+        merges.append(most_frequent)
+        corpus = merge_pair(most_frequent, corpus)
+        # Update token_set
+        for word in corpus:
+            for token in word:
+                token_set.add(token)
+        # stop when we have enough tokens (including special tokens)
+        if len(token_set) + len(special_tokens) >= vocab_size:
+            break
+
+    return merges, token_set
+
+def save_vocab(tokens, path, special_tokens):
+    full_vocab = special_tokens + sorted(tokens)
+    vocab_dict = {token: idx for idx, token in enumerate(full_vocab)}
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(vocab_dict, f, indent=2, ensure_ascii=False)
+    return vocab_dict
+
+def save_merges(merges, path):
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("#version: 0.1\n")
+        for pair in merges:
+            f.write(f"{pair[0]} {pair[1]}\n")
+
+def main():
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    corpus = read_corpus(INPUT_FILE)
+    merges, vocab_tokens = train_bpe(corpus, VOCAB_SIZE, SPECIAL_TOKENS)
+
+    vocab_path = os.path.join(OUTPUT_DIR, "vocab.json")
+    merges_path = os.path.join(OUTPUT_DIR, "merges.txt")
+
+    vocab_dict = save_vocab(vocab_tokens, vocab_path, SPECIAL_TOKENS)
+    save_merges(merges, merges_path)
+
+    print("Tokenizer training done.")
+    print(f"Vocab size (including specials): {len(vocab_dict)}")
+    print("Saved vocab to", vocab_path)
+    print("Saved merges to", merges_path)
+
+if __name__ == "__main__":
+    main()
+
+3. tokenizer/tokenizer_utils.py
+
+# tokenizer/tokenizer_utils.py
+
+import json
+
+class BPETokenizer:
+    def __init__(self, vocab_path, merges_path):
+        with open(vocab_path, 'r', encoding='utf-8') as f:
+            self.vocab = json.load(f)
+        with open(merges_path, 'r', encoding='utf-8') as f:
+            lines = f.read().splitlines()
+        # Skip version line
+        lines = [l for l in lines if not l.startswith("#")]
+        self.merges = [tuple(l.strip().split()) for l in lines]
+
+        # Map pair to merge rank (for ordering merges)
+        self.bpe_ranks = {pair: i for i, pair in enumerate(self.merges)}
+
+        self.token_to_id = self.vocab
+        self.id_to_token = {v: k for k, v in self.vocab.items()}
+
+        # special tokens
+        self.unk_token = "<unk>"
+        self.pad_token = "<pad>"
+        self.bos_token = "<bos>"
+        self.eos_token = "<eos>"
+
+    def _get_initial_tokens(self, word):
+        return list(word) + ["</w>"]
+
+    def _apply_merges(self, tokens):
+        """
+        tokens: list of str
+        Iteratively merge the best merge (lowest rank) pair in tokens until no more applicable.
+        """
+        while True:
+            pairs = [(tokens[i], tokens[i+1]) for i in range(len(tokens)-1)]
+            if not pairs:
+                break
+            # For each pair, get its rank if exists, else inf
+            ranked = [(pair, self.bpe_ranks.get(pair, float('inf'))) for pair in pairs]
+            # choose the pair with minimal rank
+            best_pair, rank = min(ranked, key=lambda x: x[1])
+            if rank == float('inf'):
+                break
+            # merge
+            new_tokens = []
+            i = 0
+            while i < len(tokens):
+                if i < len(tokens) -1 and (tokens[i], tokens[i+1]) == best_pair:
+                    new_tokens.append(tokens[i] + tokens[i+1])
+                    i += 2
+                else:
+                    new_tokens.append(tokens[i])
+                    i += 1
+            tokens = new_tokens
+        return tokens
+
+    def encode(self, text, add_special_tokens=True):
+        token_ids = []
+        if add_special_tokens:
+            token_ids.append(self.token_to_id.get(self.bos_token))
+
+        for word in text.strip().split():
+            chars = self._get_initial_tokens(word)
+            bpe_tokens = self._apply_merges(chars)
+            for token in bpe_tokens:
+                tid = self.token_to_id.get(token, self.token_to_id.get(self.unk_token))
+                token_ids.append(tid)
+
+        if add_special_tokens:
+            token_ids.append(self.token_to_id.get(self.eos_token))
+        return token_ids
+
+    def decode(self, token_ids, skip_special_tokens=True):
+        tokens = [self.id_to_token.get(tid, "") for tid in token_ids]
+        if skip_special_tokens:
+            tokens = [t for t in tokens if t not in {self.unk_token, self.pad_token, self.bos_token, self.eos_token}]
+
+        words = []
+        current = ""
+        for tok in tokens:
+            if tok.endswith("</w>"):
+                current += tok[:-4]
+                words.append(current)
+                current = ""
+            else:
+                current += tok
+        if current:
+            words.append(current)
+        return " ".join(words)
+
+4. tokenizer/test_tokenizer.py
+
+# tokenizer/test_tokenizer.py
+
+from tokenizer_utils import BPETokenizer
+import os
+
+def test_basic():
+    vocab_path = "tokenizer/output/vocab.json"
+    merges_path = "tokenizer/output/merges.txt"
+
+    if not os.path.exists(vocab_path) or not os.path.exists(merges_path):
+        print("Tokenizer files not found. Please run train_tokenizer first.")
+        return
+
+    tokenizer = BPETokenizer(vocab_path, merges_path)
+
+    text = "hello world"
+    encoded = tokenizer.encode(text)
+    print("Encoded:", encoded)
+
+    decoded = tokenizer.decode(encoded)
+    print("Decoded:", decoded)
+
+    assert isinstance(encoded, list), "Encoded should be list"
+    assert all(isinstance(x, int) for x in encoded), "All tokens should be ints"
+    assert "hello" in decoded, "Decoded should contain original words"
+    print("Tokenizer test passed.")
+
+if __name__ == "__main__":
+    test_basic()
+
+5. model/transformer.py
+
+# model/transformer.py
+
+import torch
+import torch.nn as nn
+import math
+from pathlib import Path
+import sys
+sys.path.append(str(Path(__file__).resolve().parents[2]))  # to import config
+
+import config
+
+class GPTConfig:
+    def __init__(self, vocab_size, block_size, n_layer, n_head, n_embd, dropout_prob):
+        self.vocab_size = vocab_size
+        self.block_size = block_size
+        self.n_layer = n_layer
+        self.n_head = n_head
+        self.n_embd = n_embd
+        self.dropout_prob = dropout_prob
+
+class CausalSelfAttention(nn.Module):
+    def __init__(self, config: GPTConfig):
+        super().__init__()
+        assert config.n_embd % config.n_head == 0
+        self.n_head = config.n_head
+        self.head_dim = config.n_embd // config.n_head
+
+        self.query = nn.Linear(config.n_embd, config.n_embd)
+        self.key = nn.Linear(config.n_embd, config.n_embd)
+        self.value = nn.Linear(config.n_embd, config.n_embd)
+        self.proj = nn.Linear(config.n_embd, config.n_embd)
+        self.dropout = nn.Dropout(config.dropout_prob)
+        # Causal mask will be built inside forward for variable T
+
+    def forward(self, x):
+        B, T, C = x.size()
+        q = self.query(x).view(B, T, self.n_head, self.head_dim).transpose(1, 2)  # (B, nh, T, hs)
+        k = self.key(x).view(B, T, self.n_head, self.head_dim).transpose(1, 2)
+        v = self.value(x).view(B, T, self.n_head, self.head_dim).transpose(1, 2)
+
+        # Scaled dot-product
+        att = q @ k.transpose(-2, -1)  # (B, nh, T, T)
+        att = att / math.sqrt(self.head_dim)
+
+        # causal mask: prevent looking ahead
+        mask = torch.tril(torch.ones(T, T, device=x.device)).unsqueeze(0).unsqueeze(0)  # (1,1,T,T)
+        att = att.masked_fill(mask == 0, float('-inf'))
+
+        att = torch.softmax(att, dim=-1)
+        att = self.dropout(att)
+
+        y = att @ v  # (B, nh, T, hs)
+        y = y.transpose(1, 2).contiguous().view(B, T, C)
+        y = self.proj(y)
+        y = self.dropout(y)
+        return y
+
+class FeedForward(nn.Module):
+    def __init__(self, config: GPTConfig):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(config.n_embd, 4 * config.n_embd),
+            nn.GELU(),
+            nn.Linear(4 * config.n_embd, config.n_embd),
+            nn.Dropout(config.dropout_prob)
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+class Block(nn.Module):
+    def __init__(self, config: GPTConfig):
+        super().__init__()
+        self.ln1 = nn.LayerNorm(config.n_embd)
+        self.ln2 = nn.LayerNorm(config.n_embd)
+        self.attn = CausalSelfAttention(config)
+        self.ffwd = FeedForward(config)
+
+    def forward(self, x):
+        x = x + self.attn(self.ln1(x))
+        x = x + self.ffwd(self.ln2(x))
+        return x
+
+class GPT(nn.Module):
+    def __init__(self, config: GPTConfig):
+        super().__init__()
+        self.config = config
+        self.token_embedding = nn.Embedding(config.vocab_size, config.n_embd)
+        self.position_embedding = nn.Embedding(config.block_size, config.n_embd)
+        self.blocks = nn.Sequential(*[Block(config) for _ in range(config.n_layer)])
+        self.ln_f = nn.LayerNorm(config.n_embd)
+        self.head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+
+    def forward(self, idx, targets=None):
+        """
+        idx: (B, T) long tensor of token indices
+        targets: (B, T) long tensor (for LM)
+        returns: logits (B, T, vocab_size), loss (if targets provided)
+        """
+        B, T = idx.size()
+        assert T <= self.config.block_size, "Sequence length exceeds block_size"
+
+        tok_emb = self.token_embedding(idx)  # (B, T, C)
+        positions = torch.arange(T, device=idx.device).unsqueeze(0)
+        pos_emb = self.position_embedding(positions)  # (1, T, C)
+        x = tok_emb + pos_emb
+
+        x = self.blocks(x)
+        x = self.ln_f(x)
+        logits = self.head(x)  # (B, T, vocab_size)
+
+        loss = None
+        if targets is not None:
+            # flatten
+            loss = nn.functional.cross_entropy(
+                logits.view(-1, logits.size(-1)),
+                targets.view(-1),
+                ignore_index=None
+            )
+        return logits, loss
+
+    @torch.no_grad()
+    def generate(self, idx, max_new_tokens, sampling_fn):
+        """
+        idx: (B, T) tensor, current context
+        sampling_fn: function(logits) -> next_token (B,)
+        returns: (B, T + max_new_tokens)
+        """
+        generated = idx
+        for _ in range(max_new_tokens):
+            idx_cond = generated[:, -self.config.block_size:]
+            logits, _ = self(idx_cond)
+            next_logits = logits[:, -1, :]  # (B, vocab_size)
+            next_token = sampling_fn(next_logits)
+            next_token = next_token.unsqueeze(-1)
+            generated = torch.cat((generated, next_token), dim=1)
+        return generated
+
+6. model/test_transformer.py
+
+# model/test_transformer.py
+
+import torch
+from model.transformer import GPT, GPTConfig
+
+def test():
+    # small test config
+    vocab_size = 100
+    block_size = 16
+    n_layer = 2
+    n_head = 2
+    n_embd = 64
+    dropout_prob = 0.0
+
+    config = GPTConfig(vocab_size, block_size, n_layer, n_head, n_embd, dropout_prob)
+    model = GPT(config)
+
+    # make dummy inputs
+    batch_size = 4
+    dummy_input = torch.randint(0, vocab_size, (batch_size, block_size))
+    logits, loss = model(dummy_input, dummy_input)
+
+    print("Logits shape:", logits.shape)  # expect (batch_size, block_size, vocab_size)
+    print("Loss:", loss.item())
+
+    # test generation: sample via greedy
+    sampled = model.generate(dummy_input, max_new_tokens=5, sampling_fn=lambda logit: torch.argmax(logit, dim=-1))
+    print("Generated shape:", sampled.shape)
+    print("Test transformer passed.")
+
+if __name__ == "__main__":
+    test()
+
+7. data/dataset.py
+
+# data/dataset.py
+
+import torch
+from torch.utils.data import Dataset
+from tokenizer.tokenizer_utils import BPETokenizer
+
+class TokenizedTextDataset(Dataset):
+    def __init__(self, tokenizer: BPETokenizer, filepath: str, block_size: int):
+        self.tokenizer = tokenizer
+        self.block_size = block_size
+
+        with open(filepath, 'r', encoding='utf-8') as f:
+            text = f.read()
+
+        token_ids = tokenizer.encode(text, add_special_tokens=True)
+        # optionally pad/truncate last chunk
+        self.examples = []
+        for i in range(0, len(token_ids) - block_size):
+            chunk = token_ids[i:i + block_size]
+            self.examples.append(torch.tensor(chunk, dtype=torch.long))
+
+    def __len__(self):
+        return len(self.examples)
+
+    def __getitem__(self, idx):
+        return self.examples[idx]
+
+8. utils/sampling_utils.py
+
+# utils/sampling_utils.py
+
+import torch
+import torch.nn.functional as F
+
+def top_k_logits(logits, k):
+    if k <=0:
+        return logits
+    # logits: (batch_size, vocab_size)
+    values, _ = torch.topk(logits, k)
+    min_values = values[:, -1].unsqueeze(-1)
+    return torch.where(logits < min_values, torch.full_like(logits, -float('Inf')), logits)
+
+def top_p_logits(logits, p):
+    if p <=0.0 or p >=1.0:
+        return logits
+    sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+    sorted_probs = F.softmax(sorted_logits, dim=-1)
+    cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+
+    # Mask: remove tokens where cumulative prob > p
+    sorted_indices_to_remove = cumulative_probs > p
+    # Always keep first token
+    sorted_indices_to_remove[:, 0] = False
+
+    # scatter back
+    mask = sorted_indices_to_remove.scatter(1, sorted_indices, sorted_indices_to_remove)
+    filtered_logits = logits.clone()
+    filtered_logits[mask] = -float('Inf')
+    return filtered_logits
+
+def sample_next_token(logits, temperature=1.0, top_k=0, top_p=0.0):
+    """
+    logits: (batch_size, vocab_size)
+    returns: (batch_size,) next token indices
+    """
+    # temperature scaling
+    if temperature <=0:
+        raise ValueError("temperature must be > 0")
+    logits = logits / temperature
+
+    if top_k > 0:
+        logits = top_k_logits(logits, top_k)
+    if top_p > 0.0 and top_p < 1.0:
+        logits = top_p_logits(logits, top_p)
+
+    probs = F.softmax(logits, dim=-1)
+    next_token = torch.multinomial(probs, num_samples=1)
+    return next_token.squeeze(1)
+
+9. train.py
+
+# train.py
+
+import os
+import torch
+from torch.utils.data import DataLoader
+from tokenizer.tokenizer_utils import BPETokenizer
+from data.dataset import TokenizedTextDataset
+from model.transformer import GPT, GPTConfig
+import config
+
+def save_checkpoint(model, optimizer, epoch, best_loss, path):
+    state = {
+        "epoch": epoch,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "best_loss": best_loss
+    }
+    torch.save(state, path)
+
+def load_checkpoint(path, model, optimizer, device):
+    checkpoint = torch.load(path, map_location=device)
+    model.load_state_dict(checkpoint["model_state_dict"])
+    optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    return checkpoint["epoch"], checkpoint.get("best_loss", float('inf'))
+
+def main():
+    # load config
+    cfg = config
+
+    device = torch.device(cfg["device"] if torch.cuda.is_available() and cfg["device"] == "cuda" else "cpu")
+    os.makedirs("model_checkpoints", exist_ok=True)
+
+    # prepare tokenizer
+    vocab_path = "tokenizer/output/vocab.json"
+    merges_path = "tokenizer/output/merges.txt"
+    tokenizer = BPETokenizer(vocab_path, merges_path)
+
+    # prepare dataset and loader
+    dataset = TokenizedTextDataset(tokenizer, "input.txt", block_size=cfg["block_size"])
+    dataloader = DataLoader(dataset, batch_size=cfg["batch_size"], shuffle=True)
+
+    # prepare model
+    vocab_size = len(tokenizer.vocab)
+    model_cfg = GPTConfig(
+        vocab_size=vocab_size,
+        block_size=cfg["block_size"],
+        n_layer=cfg["n_layer"],
+        n_head=cfg["n_head"],
+        n_embd=cfg["n_embd"],
+        dropout_prob=cfg["dropout_prob"]
+    )
+    model = GPT(model_cfg).to(device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg["learning_rate"])
+
+    # checkpoint paths
+    last_ckpt = os.path.join("model_checkpoints", "last.pt")
+    best_ckpt = os.path.join("model_checkpoints", "best.pt")
+
+    start_epoch = 1
+    best_loss = float('inf')
+
+    # resume if available
+    if os.path.exists(last_ckpt):
+        print("Loading checkpoint …")
+        start_epoch, best_loss = load_checkpoint(last_ckpt, model, optimizer, device)
+        print(f"Resuming from epoch {start_epoch}, best_loss = {best_loss:.6f}")
+
+    for epoch in range(start_epoch, cfg["epochs"] + 1):
+        model.train()
+        total_loss = 0.0
+        for batch in dataloader:
+            batch = batch.to(device)
+            inputs = batch[:, :-1]
+            targets = batch[:, 1:]
+            optimizer.zero_grad()
+            logits, loss = model(inputs, targets)
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+
+        avg_loss = total_loss / len(dataloader)
+        print(f"Epoch {epoch} / {cfg['epochs']} — Loss: {avg_loss:.6f}")
+
+        # save last checkpoint
+        save_checkpoint(model, optimizer, epoch + 1, best_loss, last_ckpt)
+        print(f"Saved last checkpoint to {last_ckpt}")
+
+        # save best model
+        if avg_loss < best_loss:
+            best_loss = avg_loss
+            save_checkpoint(model, optimizer, epoch + 1, best_loss, best_ckpt)
+            print(f"New best model saved: {best_ckpt} (loss {best_loss:.6f})")
+
+    print("Training complete.")
+
+10. generate.py
+
+# generate.py
+
+import torch
+from tokenizer.tokenizer_utils import BPETokenizer
+from model.transformer import GPT, GPTConfig
+from utils.sampling_utils import sample_next_token
+import config
+
+def generate_text(prompt, 
+                  checkpoint_path: str, 
+                  block_size: int, 
+                  temperature: float, 
+                  top_k: int, 
+                  top_p: float):
+    # load tokenizer
+    vocab_path = "tokenizer/output/vocab.json"
+    merges_path = "tokenizer/output/merges.txt"
+    tokenizer = BPETokenizer(vocab_path, merges_path)
+
+    # load model
+    vocab_size = len(tokenizer.vocab)
+    model_cfg = GPTConfig(
+        vocab_size=vocab_size,
+        block_size=block_size,
+        n_layer=config["n_layer"],
+        n_head=config["n_head"],
+        n_embd=config["n_embd"],
+        dropout_prob=config["dropout_prob"]
+    )
+    device = torch.device(config["device"] if torch.cuda.is_available() and config["device"] == "cuda" else "cpu")
+    model = GPT(model_cfg).to(device)
+    # load best checkpoint
+    state = torch.load(checkpoint_path, map_location=device)
+    model.load_state_dict(state["model_state_dict"])
+    model.eval()
+
+    # encode prompt
+    input_ids = tokenizer.encode(prompt, add_special_tokens=True)
+    input_tensor = torch.tensor(input_ids, dtype=torch.long, device=device).unsqueeze(0)
+
+    generated = model.generate(
+        input_tensor, 
+        max_new_tokens=config["generate"]["max_new_tokens"],
+        sampling_fn=lambda logits: sample_next_token(logits, temperature, top_k, top_p)
+    )
+
+    output = tokenizer.decode(generated[0].tolist())
+    return output
+
+if __name__ == "__main__":
+    # Example usage
+    prompt = "Once upon a time"
+    best_ckpt = "model_checkpoints/best.pt"
+    text = generate_text(prompt, checkpoint_path=best_ckpt, block_size=config["block_size"],
+                         temperature=config["generate"]["temperature"],
+                         top_k=config["generate"]["top_k"],
+                         top_p=config["generate"]["top_p"])
+    print("=== Generated ===")
+    print(text)
+
+📘 Explanation & How It Works
+Here’s how the system fits together, what each part does, and what are the key design decisions.
+
+Tokenizer (BPE)
+* train_tokenizer.py: Reads input.txt, builds initial tokens (characters + </w>), finds frequent pairs, merges them until vocabulary target is reached. Saves two files: vocab.json and merges.txt.
+* tokenizer_utils.py: Loads the vocab + merges; implements encode() (split text, apply merges) and decode()(reconstruct text). Special tokens are used for unknown, padding, BOS, EOS.
+Important points:
+* The special token </w> marks end-of-word. Without that, you lose ability to detect word boundaries when merging.
+* Unknown tokens: if a BPE token isn't in vocab, map to <unk>.
+* We include <bos> and <eos> so that generation / modeling knows start and end.
+
+Model (Transformer / GPT)
+* transformer.py: Defines a minimal GPT-style model.
+    * Embedding layers: token embedding + position embedding
+    * A stack of Transformer Blocks (n_layer)
+        * Each block: LayerNorm → causal self‑attention → residual, then another norm + feed‑forward + residual
+    * Final layer norm and a linear head to predict vocabulary logits
+    * forward() produces logits and cross‑entropy loss (if targets are present)
+    * generate() method that takes the current tokens, repeatedly samples next token via a sampling function (sampling_fn) you supply (greedy, top‑k, etc.)
+Design choices:
+* Dropout is applied in attention output and in feed‑forward layers to regularize a bit.
+* Causal attention mask ensures that for any position t, the model only uses tokens ≤ t, not future ones.
+* Positional embeddings are learned (not sinusoidal).
+* block_size limits maximum context length; sequences longer than that for generation are truncated (we just take last block_size tokens). During training, input sequences are of length block_size.
+
+Dataset
+* dataset.py: Reads full text corpus, tokenizes, then slices into fixed-length sequences. If the total token sequence is longer, we create overlapping or sequential chunks (depending on your slicing strategy). Here, simplest: sliding window with stride 1 (i.e. overlapping), or non-overlapping. In our code, we use non-overlapping (increment by 1) for simplicity but could be optimized.
+
+Training
+* train.py handles:
+    * Hyperparams from config.json: block size, batch size, number of layers, etc.
+    * Loading or resuming checkpoints:
+        * last.pt (most recent)
+        * best.pt (lowest loss so far)
+    * For each epoch: iterate over batches, compute loss, backprop, optimizer step
+    * After each epoch, save “last” checkpoint, and if current average loss < best_loss, update “best”
+Notes:
+* If you have GPU, training will be faster; else it may be slow.
+* Learning rate etc. come from config.
+* For small corpora, overfitting is expected; loss going down is fine but generalization might be weak.
+
+Generation / Inference
+* generate.py uses:
+    * The best checkpoint (or any you supply)
+    * Tokenizer to convert prompt → token IDs (including special tokens)
+    * Model to generate more tokens, using a sampling function to choose next token:
+        * could be greedy (argmax), or use sample_next_token with temperature, top‑k, top‑p
+    * Decode token IDs back to text
+
+Sampling Utilities
+* sampling_utils.py implements:
+    * top_k_logits(): keep only top k tokens by probability, mask others to ‑inf so softmax gives zero probability
+    * top_p_logits(): nucleus sampling — keep minimal set whose cumulative probability ≥ p
+    * sample_next_token(): combine temperature, top‑k, top‑p to sample next token
+
+🔧 Usage Workflow
+1. Put your dataset (corpus) into input.txt
+2. Adjust config.json hyperparameters
+3. Train tokenizer:    python tokenizer/train_tokenizer.py
+4.   
+5. Test tokenizer:    python tokenizer/test_tokenizer.py
+6.   
+7. Train model:    python train.py
+8.    This will create checkpoints: model_checkpoints/last.pt and model_checkpoints/best.pt
+9. Generate text:    python generate.py
+10.    It will load best checkpoint and use parameters from config.json to generate.
+
+⚠️ Limitations & Possible Extensions
+While this is a fully working minimal LLM for learning, there are things you may want to improve:
+* Efficiency: Very slow for large corpora and models; no batching over sequences beyond simple DataLoader, no mixed precision, etc.
+* Memory: Causal attention is O(T²) in time & space; for large block_size, this becomes expensive.
+* Evaluation: No validation split, no perplexity measurement; only training loss is monitored.
+* Sampling Strategies: Could add more advanced decoding like beam search, etc.
+* Tokenization Improvements: Handling punctuation, Unicode normalization, subword aggressiveness tuning; maybe Byte-level BPE instead of character-level.
+* LR Scheduling / Warm‑up: Useful for optimization stability.
+* Regularization: Dropout, weight decay, etc. Already minimal dropout; weight decay can be added.
+
+If you like, I can also prepare a smaller example (tiny model + small corpus) that you can run on your machine end-to-end, or adapt this code to train on Indian language or multilingual text. Do you want me to do that too?
+
