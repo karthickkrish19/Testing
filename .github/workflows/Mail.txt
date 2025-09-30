@@ -1,0 +1,13 @@
+Subject: Clarification on ElasticSearch Backup Files Observed in Azure Portal
+Dear [Recipient's Name],
+Good day.
+I would like to provide an update regarding a potential vulnerability I initially observed in the Azure portal related to backup files.
+During a review session, I noticed that within the ElasticSearch backup, several .dat files (approximately 300 files) had been generated. These appeared under what seemed to be a "shadow backup," which raised a concern about whether these files were necessary or if they could be removed as part of a remediation activity.
+To confirm this, I discussed the matter with Eric Redwine. He clarified the following points:
+* These backups are intentional snapshots created by the ElasticSearch service.
+* The term "shadow backup" might be misleading — these are not unauthorized or untracked backups.
+* While the environment I checked was a test environment (not business-critical), similar backups in production environments are business-critical.
+* The data is stored as designed and does not represent a misconfiguration or security issue.
+* These snapshots should not be deleted, as they are essential for proper ElasticSearch operations.
+Eric also recommended bringing this to the attention of the security team if needed, but confirmed that there is no immediate security concern and no action is required to remove the files.
+Please let me know if you need any additional details.
