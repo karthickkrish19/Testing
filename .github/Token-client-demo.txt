@@ -1,0 +1,4128 @@
+I'll create a professional client demo project with the complete tokenizer implementation. Here's the full advanced pure Python project:
+
+Project Structure
+
+```
+llm_tokenizer_demo/
+├── src/
+│   ├── __init__.py
+│   ├── tokenizer.py
+│   ├── vocabulary.py
+│   ├── pre_tokenizer.py
+│   ├── post_processor.py
+│   ├── trainers.py
+│   └── utils.py
+├── models/
+│   └── trained_model/
+│       ├── vocab.json
+│       ├── merges.txt
+│       └── tokenizer_config.json
+├── data/
+│   ├── training_data.txt
+│   └── demo_inputs.txt
+├── config/
+│   └── settings.json
+├── logs/
+│   └── tokenizer.log
+├── tests/
+│   └── test_tokenizer.py
+├── examples/
+│   ├── basic_usage.py
+│   ├── advanced_features.py
+│   └── batch_processing.py
+├── docs/
+│   └── README.md
+├── main.py
+├── requirements.txt
+├── setup.py
+└── run_demo.py
+```
+
+Core Implementation Files
+
+1. src/__init__.py
+
+```python
+"""
+Professional LLM Tokenizer Demo - Pure Python Implementation
+Advanced Tokenization System with Automatic Training
+"""
+
+__version__ = "3.0.0"
+__author__ = "AI Tokenizer Team"
+__email__ = "demo@tokenizer.ai"
+
+from .tokenizer import ProfessionalTokenizer
+from .vocabulary import SmartVocabulary
+from .pre_tokenizer import MultiLanguagePreTokenizer
+from .post_processor import AdaptivePostProcessor
+from .trainers import ProfessionalTrainer
+
+__all__ = [
+    'ProfessionalTokenizer',
+    'SmartVocabulary', 
+    'MultiLanguagePreTokenizer',
+    'AdaptivePostProcessor',
+    'ProfessionalTrainer'
+]
+```
+
+2. src/utils.py
+
+```python
+"""
+Advanced Utilities for Professional Tokenizer
+Pure Python Implementation with Zero Dependencies
+"""
+
+import json
+import re
+import unicodedata
+import logging
+import hashlib
+import os
+import time
+import threading
+from typing import List, Dict, Tuple, Set, Any, Optional, Union
+from collections import defaultdict, Counter
+from datetime import datetime
+from enum import Enum
+
+class LogLevel(Enum):
+    DEBUG = 10
+    INFO = 20
+    WARNING = 30
+    ERROR = 40
+    CRITICAL = 50
+
+class PerformanceMonitor:
+    """Monitor performance metrics for tokenizer operations"""
+    
+    def __init__(self):
+        self.metrics = defaultdict(list)
+        self.lock = threading.Lock()
+    
+    def record_metric(self, operation: str, duration: float, **kwargs):
+        """Record performance metric"""
+        with self.lock:
+            self.metrics[operation].append({
+                'timestamp': time.time(),
+                'duration': duration,
+                **kwargs
+            })
+            
+            # Keep only last 1000 records per operation
+            if len(self.metrics[operation]) > 1000:
+                self.metrics[operation] = self.metrics[operation][-1000:]
+    
+    def get_metrics(self, operation: str) -> Dict[str, Any]:
+        """Get metrics for specific operation"""
+        records = self.metrics.get(operation, [])
+        if not records:
+            return {}
+        
+        durations = [r['duration'] for r in records]
+        recent_records = records[-100:]  # Last 100 records
+        
+        return {
+            'operation': operation,
+            'total_calls': len(records),
+            'avg_duration': sum(durations) / len(durations),
+            'min_duration': min(durations),
+            'max_duration': max(durations),
+            'p95_duration': sorted(durations)[int(len(durations) * 0.95)],
+            'recent_avg': sum(r['duration'] for r in recent_records) / len(recent_records)
+        }
+
+class AdvancedUtils:
+    """Advanced utility functions with caching and optimization"""
+    
+    # Cache for expensive operations
+    _normalization_cache = {}
+    _fingerprint_cache = {}
+    _MAX_CACHE_SIZE = 10000
+    
+    @staticmethod
+    def safe_json_operation(filepath: str, operation: str, data: Any = None, 
+                          indent: int = 2) -> Any:
+        """Safe JSON operations with atomic writes and backup"""
+        try:
+            if operation == 'read':
+                if not os.path.exists(filepath):
+                    return None
+                
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            
+            elif operation == 'write':
+                if data is None:
+                    return False
+                
+                # Create backup if file exists
+                backup_path = None
+                if os.path.exists(filepath):
+                    timestamp = int(datetime.now().timestamp())
+                    backup_path = f"{filepath}.backup.{timestamp}"
+                    os.rename(filepath, backup_path)
+                
+                # Ensure directory exists
+                os.makedirs(os.path.dirname(filepath), exist_ok=True)
+                
+                # Write to temporary file first
+                temp_path = f"{filepath}.tmp.{os.getpid()}"
+                with open(temp_path, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, ensure_ascii=False, indent=indent, 
+                            separators=(',', ': '), sort_keys=True)
+                
+                # Atomic rename
+                os.rename(temp_path, filepath)
+                
+                # Remove backup after successful write
+                if backup_path and os.path.exists(backup_path):
+                    os.remove(backup_path)
+                
+                return True
+            
+            elif operation == 'update':
+                existing_data = AdvancedUtils.safe_json_operation(filepath, 'read') or {}
+                if isinstance(existing_data, dict) and isinstance(data, dict):
+                    existing_data.update(data)
+                    return AdvancedUtils.safe_json_operation(filepath, 'write', existing_data)
+                return False
+            
+        except Exception as e:
+            logging.error(f"JSON operation failed: {operation} on {filepath}: {str(e)}")
+            return None
+    
+    @staticmethod
+    def text_fingerprint(text: str, algorithm: str = 'md5') -> str:
+        """Generate fingerprint for text with caching"""
+        if not text:
+            return ""
+        
+        cache_key = f"{algorithm}:{text}"
+        if cache_key in AdvancedUtils._fingerprint_cache:
+            return AdvancedUtils._fingerprint_cache[cache_key]
+        
+        try:
+            if algorithm == 'md5':
+                fingerprint = hashlib.md5(text.encode('utf-8')).hexdigest()
+            elif algorithm == 'sha256':
+                fingerprint = hashlib.sha256(text.encode('utf-8')).hexdigest()
+            else:
+                fingerprint = hashlib.md5(text.encode('utf-8')).hexdigest()
+            
+            # Update cache
+            if len(AdvancedUtils._fingerprint_cache) >= AdvancedUtils._MAX_CACHE_SIZE:
+                AdvancedUtils._fingerprint_cache.clear()
+            
+            AdvancedUtils._fingerprint_cache[cache_key] = fingerprint
+            return fingerprint
+            
+        except Exception:
+            return str(hash(text))
+    
+    @staticmethod
+    def normalize_advanced(text: str, preserve_case: bool = False) -> str:
+        """Advanced text normalization with caching"""
+        if not text:
+            return ""
+        
+        cache_key = f"{preserve_case}:{text}"
+        if cache_key in AdvancedUtils._normalization_cache:
+            return AdvancedUtils._normalization_cache[cache_key]
+        
+        try:
+            # Unicode normalization
+            normalized = unicodedata.normalize('NFC', text)
+            
+            # Replace multiple whitespaces (keep newlines)
+            normalized = re.sub(r'[ \t\r\f\v]+', ' ', normalized)
+            normalized = re.sub(r'\n\s*\n', '\n\n', normalized)
+            
+            # Remove control characters but keep meaningful whitespace
+            cleaned_chars = []
+            for char in normalized:
+                if char in ['\n', '\t']:
+                    cleaned_chars.append(char)
+                elif unicodedata.category(char).startswith('C'):
+                    continue
+                else:
+                    cleaned_chars.append(char)
+            
+            result = ''.join(cleaned_chars).strip()
+            
+            if not preserve_case:
+                result = result.lower()
+            
+            # Update cache
+            if len(AdvancedUtils._normalization_cache) >= AdvancedUtils._MAX_CACHE_SIZE:
+                AdvancedUtils._normalization_cache.clear()
+            
+            AdvancedUtils._normalization_cache[cache_key] = result
+            return result
+            
+        except Exception as e:
+            logging.error(f"Normalization error: {str(e)}")
+            return text
+    
+    @staticmethod
+    def validate_text_corpus(texts: List[str], 
+                           min_length: int = 2,
+                           max_length: int = 10000) -> Tuple[List[str], List[str]]:
+        """Validate and clean text corpus with comprehensive checks"""
+        valid_texts = []
+        invalid_texts = []
+        
+        for i, text in enumerate(texts):
+            if not text or not isinstance(text, str):
+                invalid_texts.append(f"Index {i}: Invalid type")
+                continue
+            
+            # Check length boundaries
+            if len(text) < min_length:
+                invalid_texts.append(f"Index {i}: Too short ({len(text)} chars)")
+                continue
+            
+            if len(text) > max_length:
+                invalid_texts.append(f"Index {i}: Too long ({len(text)} chars)")
+                continue
+            
+            # Check for excessive repetition
+            if AdvancedUtils._has_excessive_pattern(text):
+                invalid_texts.append(f"Index {i}: Excessive repetition")
+                continue
+            
+            # Check encoding
+            try:
+                text.encode('utf-8')
+                normalized = AdvancedUtils.normalize_advanced(text, preserve_case=True)
+                valid_texts.append(normalized)
+            except (UnicodeEncodeError, UnicodeDecodeError) as e:
+                invalid_texts.append(f"Index {i}: Encoding error - {str(e)}")
+        
+        return valid_texts, invalid_texts
+    
+    @staticmethod
+    def _has_excessive_pattern(text: str, 
+                             max_char_repeat: int = 5,
+                             max_pattern_repeat: int = 3) -> bool:
+        """Check for excessive patterns in text"""
+        if len(text) < max_char_repeat:
+            return False
+        
+        # Check character repetition
+        for i in range(len(text) - max_char_repeat + 1):
+            substring = text[i:i + max_char_repeat]
+            if len(set(substring)) == 1:  # All characters same
+                return True
+        
+        # Check pattern repetition (simplified)
+        words = text.split()
+        word_counts = Counter(words)
+        if words and max(word_counts.values()) > max_pattern_repeat * (len(words) / len(word_counts)):
+            return True
+        
+        return False
+    
+    @staticmethod
+    def calculate_text_metrics(texts: List[str]) -> Dict[str, Any]:
+        """Calculate comprehensive text metrics"""
+        if not texts:
+            return {}
+        
+        total_chars = sum(len(text) for text in texts)
+        total_words = sum(len(text.split()) for text in texts)
+        total_sentences = sum(len(re.findall(r'[.!?]+', text)) for text in texts)
+        
+        # Character frequency analysis
+        char_freq = Counter()
+        word_freq = Counter()
+        
+        for text in texts:
+            char_freq.update(text)
+            word_freq.update(text.split())
+        
+        # Language detection (simplified)
+        common_english = {'the', 'be', 'to', 'of', 'and', 'a', 'in', 'that', 'have', 'i'}
+        english_word_count = sum(1 for word in word_freq if word.lower() in common_english)
+        english_ratio = english_word_count / len(word_freq) if word_freq else 0
+        
+        return {
+            'total_texts': len(texts),
+            'total_characters': total_chars,
+            'total_words': total_words,
+            'total_sentences': total_sentences,
+            'avg_text_length': total_chars / len(texts),
+            'avg_word_length': total_chars / total_words if total_words > 0 else 0,
+            'avg_words_per_sentence': total_words / total_sentences if total_sentences > 0 else 0,
+            'unique_characters': len(char_freq),
+            'unique_words': len(word_freq),
+            'most_common_chars': dict(char_freq.most_common(10)),
+            'most_common_words': dict(word_freq.most_common(10)),
+            'english_likelihood': round(english_ratio, 3)
+        }
+    
+    @staticmethod
+    def create_directory_structure(base_path: str, structure: Dict[str, Any]) -> bool:
+        """Create directory structure recursively"""
+        try:
+            if not os.path.exists(base_path):
+                os.makedirs(base_path)
+            
+            for name, content in structure.items():
+                path = os.path.join(base_path, name)
+                if content is None:  # It's a file
+                    if not os.path.exists(path):
+                        with open(path, 'w') as f:
+                            f.write('')
+                else:  # It's a directory
+                    AdvancedUtils.create_directory_structure(path, content)
+            
+            return True
+        except Exception as e:
+            logging.error(f"Directory creation error: {str(e)}")
+            return False
+
+class UnicodeRegex:
+    """Comprehensive Unicode character classes"""
+    
+    @staticmethod
+    def whitespace() -> str:
+        return r'[\s\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]+'
+    
+    @staticmethod
+    def punctuation() -> str:
+        basic_punct = r'[!\"#$%&\'()*+,-./:;<=>?@[\\\]^_`{|}~]'
+        advanced_punct = r'¡§«¶·»¿;·‐–—―‗‘’‚‛"„‟•′‵‹›‼‽⁂⁇⁈⁉⁎⁏⁐⁑⁓⁔⁕⁖⁗⁘⁙⁚⁛⁜⁝⁞'
+        return f'{basic_punct}{advanced_punct}'
+    
+    @staticmethod
+    def control_chars() -> str:
+        return r'[\x00-\x1f\x7f-\x9f\u200b\u200e\u200f\u202a-\u202e\u2060-\u2063\ufeff\ufff9-\ufffb]'
+    
+    @staticmethod
+    def emoji() -> str:
+        return r'[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF\U0001F1E0-\U0001F1FF]'
+    
+    @staticmethod
+    def numbers() -> str:
+        return r'[\d\u0660-\u0669\u06F0-\u06F9\u0966-\u096F\u09E6-\u09EF\u0A66-\u0A6F\u0AE6-\u0AEF\u0B66-\u0B6F\u0C66-\u0C6F\u0CE6-\u0CEF\u0D66-\u0D6F\u0E50-\u0E59\u0ED0-\u0ED9\u0F20-\u0F29]'
+
+class TextQualityAnalyzer:
+    """Analyze text quality for training suitability"""
+    
+    def __init__(self):
+        self.metrics_history = []
+    
+    def analyze_text(self, text: str) -> Dict[str, Any]:
+        """Analyze single text quality"""
+        if not text:
+            return {'quality_score': 0, 'issues': ['empty_text']}
+        
+        issues = []
+        score = 100  # Start with perfect score
+        
+        # Length check
+        if len(text) < 10:
+            issues.append('too_short')
+            score -= 30
+        elif len(text) > 10000:
+            issues.append('too_long')
+            score -= 20
+        
+        # Character diversity
+        unique_chars = len(set(text))
+        diversity_ratio = unique_chars / len(text) if text else 0
+        if diversity_ratio < 0.1:
+            issues.append('low_diversity')
+            score -= 25
+        
+        # Word count
+        words = text.split()
+        if len(words) < 3:
+            issues.append('few_words')
+            score -= 20
+        
+        # Check for excessive capitalization
+        upper_ratio = sum(1 for c in text if c.isupper()) / len(text) if text else 0
+        if upper_ratio > 0.5:
+            issues.append('excessive_caps')
+            score -= 15
+        
+        # Check for repetitive patterns
+        if AdvancedUtils._has_excessive_pattern(text):
+            issues.append('repetitive')
+            score -= 20
+        
+        return {
+            'quality_score': max(0, score),
+            'issues': issues,
+            'length': len(text),
+            'word_count': len(words),
+            'char_diversity': round(diversity_ratio, 3),
+            'capitalization_ratio': round(upper_ratio, 3)
+        }
+    
+    def analyze_corpus(self, texts: List[str]) -> Dict[str, Any]:
+        """Analyze corpus quality"""
+        if not texts:
+            return {'overall_quality': 0, 'total_texts': 0}
+        
+        analyses = [self.analyze_text(text) for text in texts]
+        avg_quality = sum(a['quality_score'] for a in analyses) / len(analyses)
+        
+        # Count issues
+        all_issues = []
+        for analysis in analyses:
+            all_issues.extend(analysis['issues'])
+        
+        issue_counts = Counter(all_issues)
+        
+        return {
+            'overall_quality': round(avg_quality, 2),
+            'total_texts': len(texts),
+            'quality_distribution': {
+                'excellent': sum(1 for a in analyses if a['quality_score'] >= 90),
+                'good': sum(1 for a in analyses if 70 <= a['quality_score'] < 90),
+                'fair': sum(1 for a in analyses if 50 <= a['quality_score'] < 70),
+                'poor': sum(1 for a in analyses if a['quality_score'] < 50)
+            },
+            'common_issues': dict(issue_counts.most_common(10)),
+            'avg_text_length': sum(a['length'] for a in analyses) / len(analyses),
+            'avg_word_count': sum(a['word_count'] for a in analyses) / len(analyses)
+        }
+```
+
+3. src/vocabulary.py
+
+```python
+"""
+Smart Vocabulary Management with Advanced Features
+Pure Python Implementation
+"""
+
+import json
+import logging
+import os
+import time
+from typing import Dict, List, Set, Tuple, Optional, Any, Union
+from collections import OrderedDict, Counter
+from datetime import datetime
+
+from .utils import AdvancedUtils, PerformanceMonitor
+
+class TokenMetadata:
+    """Metadata for individual tokens"""
+    
+    def __init__(self, token: str, token_id: int, token_type: str = 'regular'):
+        self.token = token
+        self.token_id = token_id
+        self.token_type = token_type
+        self.created_at = datetime.now().isoformat()
+        self.last_used = None
+        self.usage_count = 0
+        self.embedding_index = -1
+        self.language = 'unknown'
+        self.custom_metadata = {}
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary"""
+        return {
+            'token': self.token,
+            'token_id': self.token_id,
+            'token_type': self.token_type,
+            'created_at': self.created_at,
+            'last_used': self.last_used,
+            'usage_count': self.usage_count,
+            'embedding_index': self.embedding_index,
+            'language': self.language,
+            'custom_metadata': self.custom_metadata
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'TokenMetadata':
+        """Create from dictionary"""
+        metadata = cls(data['token'], data['token_id'], data.get('token_type', 'regular'))
+        metadata.created_at = data.get('created_at', metadata.created_at)
+        metadata.last_used = data.get('last_used')
+        metadata.usage_count = data.get('usage_count', 0)
+        metadata.embedding_index = data.get('embedding_index', -1)
+        metadata.language = data.get('language', 'unknown')
+        metadata.custom_metadata = data.get('custom_metadata', {})
+        return metadata
+
+class SmartVocabulary:
+    """
+    Advanced vocabulary with intelligent token management,
+    usage tracking, and automatic optimization
+    """
+    
+    def __init__(self, vocab: Optional[Dict[str, int]] = None):
+        # Core vocabulary storage
+        self.vocab = OrderedDict(vocab or {})
+        self.inverse_vocab = {v: k for k, v in self.vocab.items()} if self.vocab else {}
+        
+        # Advanced token management
+        self.token_metadata: Dict[str, TokenMetadata] = {}
+        self.special_tokens = OrderedDict()
+        
+        # Performance monitoring
+        self.monitor = PerformanceMonitor()
+        
+        # Statistics and analytics
+        self.stats = {
+            'total_tokens': 0,
+            'regular_tokens': 0,
+            'special_tokens': 0,
+            'merge_tokens': 0,
+            'total_lookups': 0,
+            'cache_hits': 0,
+            'cache_misses': 0
+        }
+        
+        # Configuration
+        self.config = {
+            'max_vocab_size': 100000,
+            'min_token_frequency': 1,
+            'enable_usage_tracking': True,
+            'auto_optimize': True,
+            'language': 'multilingual'
+        }
+        
+        # Initialize special tokens
+        self._initialize_special_tokens()
+        self._update_stats()
+        
+        logging.info(f"Initialized SmartVocabulary with {len(self.vocab)} tokens")
+    
+    def _initialize_special_tokens(self) -> None:
+        """Initialize comprehensive special tokens with metadata"""
+        special_tokens_config = [
+            ('[UNK]', 'Unknown token', 'control'),
+            ('[PAD]', 'Padding token', 'control'),
+            ('[BOS]', 'Beginning of sequence', 'control'),
+            ('[EOS]', 'End of sequence', 'control'),
+            ('[CLS]', 'Classification token', 'control'),
+            ('[SEP]', 'Separator token', 'control'),
+            ('[MASK]', 'Mask token', 'control'),
+            ('[NUM]', 'Number token', 'semantic'),
+            ('[URL]', 'URL token', 'semantic'),
+            ('[EMAIL]', 'Email token', 'semantic'),
+            ('[NAME]', 'Name token', 'semantic'),
+            ('[DATE]', 'Date token', 'semantic'),
+            ('[TIME]', 'Time token', 'semantic')
+        ]
+        
+        for token, description, token_type in special_tokens_config:
+            if token not in self.vocab:
+                token_id = len(self.vocab)
+                self.vocab[token] = token_id
+                self.inverse_vocab[token_id] = token
+                
+                # Create metadata
+                metadata = TokenMetadata(token, token_id, token_type)
+                metadata.custom_metadata['description'] = description
+                self.token_metadata[token] = metadata
+                
+                self.special_tokens[token] = {
+                    'id': token_id,
+                    'description': description,
+                    'type': token_type,
+                    'metadata': metadata.to_dict()
+                }
+    
+    def add_token(self, token: str, token_type: str = 'regular', 
+                  metadata: Optional[Dict[str, Any]] = None) -> int:
+        """Add token with comprehensive metadata tracking"""
+        start_time = time.time()
+        
+        try:
+            if token in self.vocab:
+                # Update usage statistics
+                if self.config['enable_usage_tracking']:
+                    self._update_token_usage(token)
+                return self.vocab[token]
+            
+            # Check vocabulary size limits
+            if len(self.vocab) >= self.config['max_vocab_size']:
+                if self.config['auto_optimize']:
+                    self._optimize_vocabulary()
+                else:
+                    logging.warning(f"Vocabulary size limit reached: {len(self.vocab)}")
+                    return self.vocab.get('[UNK]', 0)
+            
+            # Add new token
+            token_id = len(self.vocab)
+            self.vocab[token] = token_id
+            self.inverse_vocab[token_id] = token
+            
+            # Create and store metadata
+            token_metadata = TokenMetadata(token, token_id, token_type)
+            if metadata:
+                token_metadata.custom_metadata.update(metadata)
+            self.token_metadata[token] = token_metadata
+            
+            # Update special tokens if applicable
+            if token_type == 'special' and token not in self.special_tokens:
+                self.special_tokens[token] = {
+                    'id': token_id,
+                    'description': metadata.get('description', 'User-defined special token'),
+                    'type': token_type,
+                    'metadata': token_metadata.to_dict()
+                }
+            
+            # Update statistics
+            self._update_stats()
+            
+            duration = time.time() - start_time
+            self.monitor.record_metric('add_token', duration, token=token, token_type=token_type)
+            
+            logging.debug(f"Added token: '{token}' (ID: {token_id}, Type: {token_type})")
+            return token_id
+            
+        except Exception as e:
+            logging.error(f"Error adding token '{token}': {str(e)}")
+            return self.vocab.get('[UNK]', 0)
+    
+    def add_tokens_batch(self, tokens: List[str], token_type: str = 'regular') -> List[int]:
+        """Add multiple tokens efficiently"""
+        return [self.add_token(token, token_type) for token in tokens]
+    
+    def token_to_id(self, token: str, update_usage: bool = True) -> int:
+        """Convert token to ID with usage tracking and fallback"""
+        start_time = time.time()
+        
+        self.stats['total_lookups'] += 1
+        
+        if token in self.vocab:
+            if update_usage and self.config['enable_usage_tracking']:
+                self._update_token_usage(token)
+            self.stats['cache_hits'] += 1
+            
+            duration = time.time() - start_time
+            self.monitor.record_metric('token_to_id', duration, cache_hit=True)
+            
+            return self.vocab[token]
+        else:
+            self.stats['cache_misses'] += 1
+            
+            duration = time.time() - start_time
+            self.monitor.record_metric('token_to_id', duration, cache_hit=False)
+            
+            return self.vocab.get('[UNK]', 0)
+    
+    def id_to_token(self, token_id: int) -> str:
+        """Convert ID to token with bounds checking"""
+        return self.inverse_vocab.get(token_id, '[UNK]')
+    
+    def encode_sequence(self, sequence: List[str]) -> List[int]:
+        """Encode sequence of tokens with performance tracking"""
+        start_time = time.time()
+        
+        token_ids = [self.token_to_id(token) for token in sequence]
+        
+        duration = time.time() - start_time
+        self.monitor.record_metric('encode_sequence', duration, sequence_length=len(sequence))
+        
+        return token_ids
+    
+    def decode_sequence(self, token_ids: List[int]) -> List[str]:
+        """Decode sequence of token IDs"""
+        return [self.id_to_token(tid) for tid in token_ids]
+    
+    def _update_token_usage(self, token: str) -> None:
+        """Update token usage statistics"""
+        if token in self.token_metadata:
+            metadata = self.token_metadata[token]
+            metadata.usage_count += 1
+            metadata.last_used = datetime.now().isoformat()
+    
+    def _update_stats(self) -> None:
+        """Update vocabulary statistics"""
+        self.stats['total_tokens'] = len(self.vocab)
+        self.stats['special_tokens'] = len(self.special_tokens)
+        self.stats['regular_tokens'] = self.stats['total_tokens'] - self.stats['special_tokens']
+        
+        # Count merge tokens (tokens containing multiple characters)
+        merge_count = sum(1 for token in self.vocab if len(token) > 1)
+        self.stats['merge_tokens'] = merge_count
+    
+    def _optimize_vocabulary(self) -> None:
+        """Optimize vocabulary by removing infrequent tokens"""
+        if not self.config['enable_usage_tracking']:
+            logging.warning("Cannot optimize vocabulary without usage tracking")
+            return
+        
+        # Identify infrequent tokens (excluding special tokens)
+        infrequent_tokens = []
+        for token, metadata in self.token_metadata.items():
+            if (metadata.token_type == 'regular' and 
+                metadata.usage_count < self.config['min_token_frequency']):
+                infrequent_tokens.append(token)
+        
+        if not infrequent_tokens:
+            return
+        
+        logging.info(f"Optimizing vocabulary: removing {len(infrequent_tokens)} infrequent tokens")
+        
+        # Remove infrequent tokens
+        for token in infrequent_tokens:
+            if token in self.vocab:
+                token_id = self.vocab[token]
+                del self.vocab[token]
+                del self.inverse_vocab[token_id]
+                if token in self.token_metadata:
+                    del self.token_metadata[token]
+        
+        # Rebuild vocabulary with continuous IDs
+        self._rebuild_vocabulary()
+    
+    def _rebuild_vocabulary(self) -> None:
+        """Rebuild vocabulary with continuous token IDs"""
+        new_vocab = OrderedDict()
+        new_inverse = {}
+        new_metadata = {}
+        
+        # Special tokens first
+        for token in self.special_tokens:
+            if token in self.vocab:
+                new_id = len(new_vocab)
+                new_vocab[token] = new_id
+                new_inverse[new_id] = token
+                if token in self.token_metadata:
+                    self.token_metadata[token].token_id = new_id
+                    new_metadata[token] = self.token_metadata[token]
+        
+        # Regular tokens
+        for token in self.vocab:
+            if token not in new_vocab:
+                new_id = len(new_vocab)
+                new_vocab[token] = new_id
+                new_inverse[new_id] = token
+                if token in self.token_metadata:
+                    self.token_metadata[token].token_id = new_id
+                    new_metadata[token] = self.token_metadata[token]
+        
+        self.vocab = new_vocab
+        self.inverse_vocab = new_inverse
+        self.token_metadata = new_metadata
+        
+        # Update special tokens IDs
+        for token in self.special_tokens:
+            if token in self.vocab:
+                self.special_tokens[token]['id'] = self.vocab[token]
+    
+    def get_token_info(self, token: str) -> Optional[Dict[str, Any]]:
+        """Get comprehensive token information"""
+        if token not in self.vocab:
+            return None
+        
+        token_id = self.vocab[token]
+        base_info = {
+            'token': token,
+            'id': token_id,
+            'is_special': token in self.special_tokens
+        }
+        
+        if token in self.token_metadata:
+            base_info.update(self.token_metadata[token].to_dict())
+        
+        if token in self.special_tokens:
+            base_info.update(self.special_tokens[token])
+        
+        return base_info
+    
+    def get_usage_statistics(self) -> Dict[str, Any]:
+        """Get comprehensive usage statistics"""
+        if not self.config['enable_usage_tracking']:
+            return {'enabled': False}
+        
+        used_tokens = [md for md in self.token_metadata.values() if md.usage_count > 0]
+        unused_tokens = [md for md in self.token_metadata.values() if md.usage_count == 0]
+        
+        if used_tokens:
+            avg_usage = sum(md.usage_count for md in used_tokens) / len(used_tokens)
+            max_used = max(used_tokens, key=lambda x: x.usage_count)
+        else:
+            avg_usage = 0
+            max_used = None
+        
+        return {
+            'enabled': True,
+            'total_tokens': len(self.token_metadata),
+            'used_tokens': len(used_tokens),
+            'unused_tokens': len(unused_tokens),
+            'usage_ratio': len(used_tokens) / len(self.token_metadata) if self.token_metadata else 0,
+            'average_usage': round(avg_usage, 2),
+            'most_used_token': max_used.to_dict() if max_used else None,
+            'recently_used': sorted(used_tokens, key=lambda x: x.last_used or '', reverse=True)[:10]
+        }
+    
+    def save(self, filepath: str) -> bool:
+        """Save vocabulary with all metadata"""
+        save_data = {
+            'vocab': dict(self.vocab),
+            'special_tokens': dict(self.special_tokens),
+            'token_metadata': {k: v.to_dict() for k, v in self.token_metadata.items()},
+            'stats': self.stats,
+            'config': self.config,
+            'version': '3.0.0',
+            'saved_at': datetime.now().isoformat()
+        }
+        
+        return AdvancedUtils.safe_json_operation(filepath, 'write', save_data)
+    
+    @classmethod
+    def load(cls, filepath: str) -> Optional['SmartVocabulary']:
+        """Load vocabulary from file"""
+        data = AdvancedUtils.safe_json_operation(filepath, 'read')
+        if not data:
+            return None
+        
+        try:
+            vocab = cls(data.get('vocab', {}))
+            vocab.special_tokens = OrderedDict(data.get('special_tokens', {}))
+            vocab.stats = data.get('stats', vocab.stats)
+            vocab.config = data.get('config', vocab.config)
+            
+            # Load token metadata
+            token_metadata = data.get('token_metadata', {})
+            for token, meta_dict in token_metadata.items():
+                vocab.token_metadata[token] = TokenMetadata.from_dict(meta_dict)
+            
+            vocab._update_stats()
+            logging.info(f"Loaded vocabulary from {filepath}")
+            return vocab
+            
+        except Exception as e:
+            logging.error(f"Error loading vocabulary from {filepath}: {str(e)}")
+            return None
+    
+    def __len__(self) -> int:
+        return len(self.vocab)
+    
+    def __contains__(self, token: str) -> bool:
+        return token in self.vocab
+    
+    def __str__(self) -> str:
+        stats = self.get_usage_statistics()
+        return (f"SmartVocabulary(tokens={len(self.vocab)}, "
+                f"special={len(self.special_tokens)}, "
+                f"usage_ratio={stats.get('usage_ratio', 0):.2f})")
+    
+    def __repr__(self) -> str:
+        return f"SmartVocabulary({len(self.vocab)} tokens)"
+```
+
+4. src/pre_tokenizer.py
+
+```python
+"""
+Multi-language Pre-tokenizer with Advanced Text Processing
+Pure Python Implementation
+"""
+
+import re
+import logging
+import time
+from typing import List, Tuple, Dict, Any, Optional, Set
+from collections import Counter
+
+from .utils import AdvancedUtils, UnicodeRegex, TextQualityAnalyzer, PerformanceMonitor
+
+class TokenizationRule:
+    """Represents a tokenization rule with priority and conditions"""
+    
+    def __init__(self, pattern: str, replacement: str, priority: int = 0, 
+                 description: str = "", conditions: Optional[Dict[str, Any]] = None):
+        self.pattern = re.compile(pattern)
+        self.replacement = replacement
+        self.priority = priority
+        self.description = description
+        self.conditions = conditions or {}
+        self.usage_count = 0
+    
+    def apply(self, text: str, context: Optional[Dict[str, Any]] = None) -> str:
+        """Apply rule to text if conditions are met"""
+        self.usage_count += 1
+        
+        # Check conditions
+        if self.conditions:
+            if not self._check_conditions(context):
+                return text
+        
+        return self.pattern.sub(self.replacement, text)
+    
+    def _check_conditions(self, context: Optional[Dict[str, Any]]) -> bool:
+        """Check if rule conditions are satisfied"""
+        if not context:
+            return True
+        
+        for key, expected_value in self.conditions.items():
+            if key not in context or context[key] != expected_value:
+                return False
+        
+        return True
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert rule to dictionary"""
+        return {
+            'pattern': self.pattern.pattern,
+            'replacement': self.replacement,
+            'priority': self.priority,
+            'description': self.description,
+            'conditions': self.conditions,
+            'usage_count': self.usage_count
+        }
+
+class MultiLanguagePreTokenizer:
+    """
+    Advanced pre-tokenizer with multi-language support,
+    rule-based processing, and learning capabilities
+    """
+    
+    def __init__(self, 
+                 language: str = 'english',
+                 strategies: Optional[List[str]] = None,
+                 lowercase: bool = True,
+                 strip_accents: bool = False,
+                 preserve_case_tokens: Optional[List[str]] = None):
+        
+        self.language = language
+        self.strategies = strategies or ['whitespace', 'punctuation', 'numbers', 'urls', 'emails']
+        self.lowercase = lowercase
+        self.strip_accents = strip_accents
+        self.preserve_case_tokens = set(preserve_case_tokens or [])
+        
+        # Performance monitoring
+        self.monitor = PerformanceMonitor()
+        self.quality_analyzer = TextQualityAnalyzer()
+        
+        # Rule system
+        self.rules: List[TokenizationRule] = []
+        self.learned_patterns: List[TokenizationRule] = []
+        
+        # Statistics
+        self.stats = {
+            'total_texts_processed': 0,
+            'total_tokens_generated': 0,
+            'average_token_length': 0.0,
+            'language_distribution': Counter(),
+            'rule_usage': Counter()
+        }
+        
+        # Language-specific configurations
+        self.language_configs = self._load_language_configs()
+        
+        # Initialize patterns and rules
+        self.patterns = self._compile_patterns()
+        self._initialize_default_rules()
+        
+        logging.info(f"Initialized MultiLanguagePreTokenizer for {language}")
+    
+    def _load_language_configs(self) -> Dict[str, Dict[str, Any]]:
+        """Load language-specific configurations"""
+        return {
+            'english': {
+                'contractions': {
+                    "n't": " not",
+                    "'s": " is",
+                    "'re": " are", 
+                    "'ve": " have",
+                    "'ll": " will",
+                    "'d": " would"
+                },
+                'preserve_case': ['I', 'USA', 'UK', 'NASA']
+            },
+            'spanish': {
+                'contractions': {
+                    "al": "a el",
+                    "del": "de el"
+                },
+                'preserve_case': ['EEUU', 'UE']
+            },
+            'french': {
+                'contractions': {
+                    "au": "à le",
+                    "du": "de le",
+                    "aux": "à les",
+                    "des": "de les"
+                },
+                'preserve_case': ['USA', 'UE']
+            }
+        }
+    
+    def _compile_patterns(self) -> Dict[str, re.Pattern]:
+        """Compile regex patterns for different strategies"""
+        patterns = {}
+        
+        # Base patterns
+        if 'whitespace' in self.strategies:
+            patterns['whitespace'] = re.compile(UnicodeRegex.whitespace())
+        
+        if 'punctuation' in self.strategies:
+            patterns['punctuation'] = re.compile(UnicodeRegex.punctuation())
+        
+        if 'numbers' in self.strategies:
+            patterns['numbers'] = re.compile(UnicodeRegex.numbers() + r'[,\d.]*')
+        
+        if 'urls' in self.strategies:
+            patterns['urls'] = re.compile(
+                r'https?://[^\s]+|www\.[^\s]+|[^\s]+\.(com|org|net|edu|gov)[^\s]*'
+            )
+        
+        if 'emails' in self.strategies:
+            patterns['emails'] = re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b')
+        
+        if 'control_chars' in self.strategies:
+            patterns['control_chars'] = re.compile(UnicodeRegex.control_chars())
+        
+        # Advanced patterns
+        if 'dates' in self.strategies:
+            patterns['dates'] = re.compile(
+                r'\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b|\b\d{4}[/-]\d{1,2}[/-]\d{1,2}\b'
+            )
+        
+        if 'times' in self.strategies:
+            patterns['times'] = re.compile(r'\b\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?\b', re.IGNORECASE)
+        
+        return patterns
+    
+    def _initialize_default_rules(self) -> None:
+        """Initialize default tokenization rules"""
+        # URL and email preservation
+        self.add_rule(
+            pattern=UnicodeRegex.urls(),
+            replacement=' [URL] ',
+            priority=10,
+            description="Preserve URLs as single tokens"
+        )
+        
+        self.add_rule(
+            pattern=UnicodeRegex.emails(),
+            replacement=' [EMAIL] ',
+            priority=10,
+            description="Preserve emails as single tokens"
+        )
+        
+        # Number preservation
+        self.add_rule(
+            pattern=UnicodeRegex.numbers() + r'[,\d.]*\d',
+            replacement=' [NUM] ',
+            priority=5,
+            description="Preserve numbers as single tokens"
+        )
+        
+        # Language-specific rules
+        lang_config = self.language_configs.get(self.language, {})
+        contractions = lang_config.get('contractions', {})
+        
+        for contraction, expansion in contractions.items():
+            self.add_rule(
+                pattern=rf'\b(\w+){re.escape(contraction)}\b',
+                replacement=rf'\1 {expansion} ',
+                priority=8,
+                description=f"Expand {contraction} contraction",
+                conditions={'language': self.language}
+            )
+    
+    def add_rule(self, pattern: str, replacement: str, priority: int = 0,
+                 description: str = "", conditions: Optional[Dict[str, Any]] = None) -> None:
+        """Add a tokenization rule"""
+        rule = TokenizationRule(pattern, replacement, priority, description, conditions)
+        self.rules.append(rule)
+        self.rules.sort(key=lambda x: x.priority, reverse=True)
+        
+        logging.debug(f"Added tokenization rule: {description}")
+    
+    def pre_tokenize(self, text: str, return_offsets: bool = False, 
+                   context: Optional[Dict[str, Any]] = None) -> Any:
+        """
+        Advanced pre-tokenization with multiple strategies and rules
+        
+        Args:
+            text: Input text to tokenize
+            return_offsets: Whether to return character offsets
+            context: Additional context for rule application
+        
+        Returns:
+            Tokenized text or tokens with offsets
+        """
+        start_time = time.time()
+        
+        if not text:
+            result = [] if not return_offsets else []
+            duration = time.time() - start_time
+            self.monitor.record_metric('pre_tokenize', duration, text_length=0)
+            return result
+        
+        # Store original text for offset calculation
+        original_text = text
+        
+        # Step 1: Normalize text
+        text = AdvancedUtils.normalize_advanced(text, preserve_case=True)
+        
+        # Step 2: Apply language detection if not provided
+        if context is None:
+            context = {}
+        if 'language' not in context:
+            context['language'] = self._detect_language(text)
+        
+        # Step 3: Apply text transformations
+        if self.strip_accents:
+            text = self._strip_accents_advanced(text)
+        
+        # Step 4: Apply tokenization rules
+        text = self._apply_rules(text, context)
+        
+        # Step 5: Apply pattern-based tokenization strategies
+        tokens = self._apply_tokenization_strategies(text)
+        
+        # Step 6: Case handling
+        tokens = self._handle_case(tokens)
+        
+        # Step 7: Filter and clean tokens
+        tokens = [token for token in tokens if token.strip()]
+        
+        # Update statistics
+        self._update_stats(tokens, context.get('language', 'unknown'))
+        
+        duration = time.time() - start_time
+        self.monitor.record_metric('pre_tokenize', duration, 
+                                 text_length=len(original_text),
+                                 token_count=len(tokens),
+                                 language=context.get('language'))
+        
+        if return_offsets:
+            return self._calculate_offsets(tokens, original_text)
+        
+        return tokens
+    
+    def _detect_language(self, text: str) -> str:
+        """Simple language detection based on common words"""
+        if not text:
+            return self.language
+        
+        text_lower = text.lower()
+        
+        # Common words for different languages
+        language_indicators = {
+            'english': {'the', 'and', 'is', 'in', 'to', 'of', 'a', 'that', 'it', 'for'},
+            'spanish': {'el', 'la', 'y', 'en', 'de', 'que', 'es', 'un', 'por', 'con'},
+            'french': {'le', 'la', 'et', 'en', 'de', 'que', 'est', 'un', 'pour', 'dans'},
+            'german': {'der', 'die', 'das', 'und', 'in', 'den', 'von', 'zu', 'ist', 'sich'}
+        }
+        
+        scores = {}
+        for lang, words in language_indicators.items():
+            scores[lang] = sum(1 for word in words if word in text_lower)
+        
+        # Return language with highest score, fallback to configured language
+        if scores:
+            detected_lang = max(scores.items(), key=lambda x: x[1])[0]
+            if scores[detected_lang] > 0:
+                return detected_lang
+        
+        return self.language
+    
+    def _apply_rules(self, text: str, context: Dict[str, Any]) -> str:
+        """Apply all tokenization rules in priority order"""
+        for rule in self.rules:
+            try:
+                text = rule.apply(text, context)
+                if rule.description:
+                    self.stats['rule_usage'][rule.description] += 1
+            except Exception as e:
+                logging.warning(f"Rule application failed: {rule.description} - {str(e)}")
+        
+        return text
+    
+    def _apply_tokenization_strategies(self, text: str) -> List[str]:
+        """Apply pattern-based tokenization strategies"""
+        tokens = [text]  # Start with full text
+        
+        for strategy in self.strategies:
+            if strategy in self.patterns:
+                tokens = self._apply_strategy(tokens, strategy)
+        
+        return tokens
+    
+    def _apply_strategy(self, tokens: List[str], strategy: str) -> List[str]:
+        """Apply specific tokenization strategy"""
+        pattern = self.patterns[strategy]
+        new_tokens = []
+        
+        for token in tokens:
+            # Check if token should be preserved as-is
+            if self._should_preserve_token(token, strategy):
+                new_tokens.append(token)
+                continue
+            
+            # Split token based on strategy
+            if strategy == 'punctuation':
+                new_tokens.extend(self._split_punctuation(token))
+            elif strategy in ['urls', 'emails', 'numbers', 'dates', 'times']:
+                # These are already handled by rules, but double-check
+                if pattern.fullmatch(token):
+                    new_tokens.append(token)
+                else:
+                    new_tokens.extend(pattern.split(token))
+            else:
+                # General splitting
+                parts = pattern.split(token)
+                matches = pattern.findall(token)
+                
+                # Reconstruct with separators
+                reconstructed = []
+                for i, part in enumerate(parts):
+                    if part:
+                        reconstructed.append(part)
+                    if i < len(matches):
+                        reconstructed.append(matches[i])
+                new_tokens.extend(reconstructed)
+        
+        return new_tokens
+    
+    def _should_preserve_token(self, token: str, strategy: str) -> bool:
+        """Check if token should be preserved from further splitting"""
+        # Preserve special tokens
+        if token.startswith('[') and token.endswith(']'):
+            return True
+        
+        # Preserve case-sensitive tokens
+        if token in self.preserve_case_tokens:
+            return True
+        
+        # For certain strategies, preserve already-identified patterns
+        if strategy in ['whitespace', 'control_chars']:
+            return False
+        
+        return False
+    
+    def _split_punctuation(self, token: str) -> List[str]:
+        """Advanced punctuation splitting"""
+        if not token or len(token) == 1:
+            return [token]
+        
+        # Handle hyphenated words
+        if '-' in token and len(token) > 3:
+            parts = token.split('-')
+            if all(len(part) > 1 for part in parts):
+                # It's a compound word, keep together
+                return [token]
+        
+        # General punctuation splitting
+        parts = []
+        current = []
+        
+        for char in token:
+            if UnicodeRegex.punctuation().match(char):
+                if current:
+                    parts.append(''.join(current))
+                    current = []
+                parts.append(char)
+            else:
+                current.append(char)
+        
+        if current:
+            parts.append(''.join(current))
+        
+        return parts
+    
+    def _strip_accents_advanced(self, text: str) -> str:
+        """Advanced accent stripping that preserves some special characters"""
+        import unicodedata
+        
+        result = []
+        for char in text:
+            # Decompose character
+            decomposed = unicodedata.normalize('NFD', char)
+            
+            # Remove diacritics but keep the base character
+            if len(decomposed) > 1 and unicodedata.category(decomposed[0]) != 'Mn':
+                # Keep the base character and remove combining marks
+                base_char = decomposed[0]
+                result.append(base_char)
+            else:
+                result.append(char)
+        
+        return ''.join(result)
+    
+    def _handle_case(self, tokens: List[str]) -> List[str]:
+        """Handle case transformation based on configuration"""
+        if not self.lowercase:
+            return tokens
+        
+        processed_tokens = []
+        for token in tokens:
+            # Don't lowercase preserved tokens or special tokens
+            if (token in self.preserve_case_tokens or 
+                (token.startswith('[') and token.endswith(']'))):
+                processed_tokens.append(token)
+            else:
+                processed_tokens.append(token.lower())
+        
+        return processed_tokens
+    
+    def _calculate_offsets(self, tokens: List[str], original_text: str) -> List[Tuple[str, Tuple[int, int]]]:
+        """Calculate character offsets for tokens"""
+        offsets = []
+        current_pos = 0
+        
+        for token in tokens:
+            # Find token in original text
+            start = original_text.find(token, current_pos)
+            if start == -1:
+                # Try case-insensitive search
+                start_lower = original_text.lower().find(token.lower(), current_pos)
+                if start_lower != -1:
+                    start = start_lower
+                else:
+                    # Use approximate position
+                    start = current_pos
+            
+            end = start + len(token)
+            offsets.append((token, (start, end)))
+            current_pos = end
+        
+        return offsets
+    
+    def _update_stats(self, tokens: List[str], language: str) -> None:
+        """Update tokenization statistics"""
+        if not tokens:
+            return
+        
+        total_chars = sum(len(token) for token in tokens)
+        
+        self.stats['total_texts_processed'] += 1
+        self.stats['total_tokens_generated'] += len(tokens)
+        self.stats['average_token_length'] = (
+            (self.stats['average_token_length'] * (self.stats['total_texts_processed'] - 1) + 
+             total_chars / len(tokens)) / self.stats['total_texts_processed']
+        )
+        self.stats['language_distribution'][language] += 1
+    
+    def learn_from_corpus(self, texts: List[str], min_frequency: int = 5) -> None:
+        """Learn tokenization patterns from corpus"""
+        logging.info(f"Learning patterns from {len(texts)} texts")
+        
+        # Tokenize all texts
+        all_tokens = []
+        for text in texts:
+            tokens = self.pre_tokenize(text)
+            all_tokens.extend(tokens)
+        
+        # Find frequent multi-word expressions
+        token_freq = Counter(all_tokens)
+        ngram_freq = Counter()
+        
+        # Generate 2-grams and 3-grams
+        for text in texts:
+            tokens = self.pre_tokenize(text)
+            for n in [2, 3]:
+                for i in range(len(tokens) - n + 1):
+                    ngram = ' '.join(tokens[i:i+n])
+                    ngram_freq[ngram] += 1
+        
+        # Learn patterns for frequent n-grams
+        for ngram, freq in ngram_freq.items():
+            if freq >= min_frequency and len(ngram.split()) > 1:
+                pattern = re.escape(ngram)
+                self.learned_patterns.append(
+                    TokenizationRule(
+                        pattern=pattern,
+                        replacement=ngram.replace(' ', '_'),
+                        priority=7,
+                        description=f"Learned n-gram: {ngram}"
+                    )
+                )
+                logging.debug(f"Learned pattern: {ngram} (freq: {freq})")
+    
+    def get_statistics(self) -> Dict[str, Any]:
+        """Get comprehensive pre-tokenizer statistics"""
+        stats = self.stats.copy()
+        stats['rule_usage'] = dict(self.stats['rule_usage'])
+        stats['language_distribution'] = dict(self.stats['language_distribution'])
+        stats['learned_patterns_count'] = len(self.learned_patterns)
+        stats['active_rules_count'] = len(self.rules)
+        
+        # Performance metrics
+        perf_metrics = self.monitor.get_metrics('pre_tokenize')
+        stats['performance'] = perf_metrics
+        
+        return stats
+    
+    def save_rules(self, filepath: str) -> bool:
+        """Save learned rules and patterns"""
+        save_data = {
+            'rules': [rule.to_dict() for rule in self.rules],
+            'learned_patterns': [rule.to_dict() for rule in self.learned_patterns],
+            'stats': self.stats,
+            'config': {
+                'language': self.language,
+                'strategies': self.strategies,
+                'lowercase': self.lowercase,
+                'strip_accents': self.strip_accents
+            }
+        }
+        
+        return AdvancedUtils.safe_json_operation(filepath, 'write', save_data)
+    
+    def load_rules(self, filepath: str) -> bool:
+        """Load rules and patterns from file"""
+        data = AdvancedUtils.safe_json_operation(filepath, 'read')
+        if not data:
+            return False
+        
+        try:
+            # Clear existing rules
+            self.rules.clear()
+            self.learned_patterns.clear()
+            
+            # Load rules
+            for rule_data in data.get('rules', []):
+                rule = TokenizationRule(
+                    pattern=rule_data['pattern'],
+                    replacement=rule_data['replacement'],
+                    priority=rule_data.get('priority', 0),
+                    description=rule_data.get('description', ''),
+                    conditions=rule_data.get('conditions', {})
+                )
+                rule.usage_count = rule_data.get('usage_count', 0)
+                self.rules.append(rule)
+            
+            # Load learned patterns
+            for pattern_data in data.get('learned_patterns', []):
+                pattern = TokenizationRule(
+                    pattern=pattern_data['pattern'],
+                    replacement=pattern_data['replacement'],
+                    priority=pattern_data.get('priority', 0),
+                    description=pattern_data.get('description', '')
+                )
+                self.learned_patterns.append(pattern)
+            
+            # Update configuration
+            config = data.get('config', {})
+            self.language = config.get('language', self.language)
+            self.strategies = config.get('strategies', self.strategies)
+            self.lowercase = config.get('lowercase', self.lowercase)
+            self.strip_accents = config.get('strip_accents', self.strip_accents)
+            
+            # Update statistics
+            self.stats.update(data.get('stats', {}))
+            
+            # Sort rules by priority
+            self.rules.sort(key=lambda x: x.priority, reverse=True)
+            
+            logging.info(f"Loaded {len(self.rules)} rules and {len(self.learned_patterns)} patterns")
+            return True
+            
+        except Exception as e:
+            logging.error(f"Error loading rules from {filepath}: {str(e)}")
+            return False
+```
+
+5. src/trainers.py
+
+```python
+"""
+Professional Trainer with Adaptive Learning and Optimization
+Pure Python Implementation
+"""
+
+import logging
+import time
+import math
+from typing import List, Dict, Tuple, Set, Optional, Any, Union
+from collections import defaultdict, Counter
+from dataclasses import dataclass
+
+from .utils import AdvancedUtils, PerformanceMonitor, TextQualityAnalyzer
+
+@dataclass
+class TrainingConfig:
+    """Configuration for tokenizer training"""
+    vocab_size: int = 30000
+    min_frequency: int = 2
+    special_tokens: List[str] = None
+    coverage_threshold: float = 0.95
+    max_merge_operations: int = 20000
+    adaptive_learning: bool = True
+    progress_callback: Optional[callable] = None
+    
+    def __post_init__(self):
+        if self.special_tokens is None:
+            self.special_tokens = ['[UNK]', '[PAD]', '[BOS]', '[EOS]', '[CLS]', '[SEP]', '[MASK]']
+
+@dataclass
+class TrainingMetrics:
+    """Training metrics and statistics"""
+    start_time: float
+    end_time: float = 0.0
+    initial_vocab_size: int = 0
+    final_vocab_size: int = 0
+    total_merges: int = 0
+    compression_ratio: float = 1.0
+    corpus_coverage: float = 0.0
+    training_texts: int = 0
+    unique_words: int = 0
+    quality_score: float = 0.0
+    
+    @property
+    def duration(self) -> float:
+        return self.end_time - self.start_time
+    
+    @property
+    def merges_per_second(self) -> float:
+        return self.total_merges / self.duration if self.duration > 0 else 0.0
+
+class ProfessionalTrainer:
+    """
+    Professional BPE trainer with adaptive learning,
+    quality monitoring, and comprehensive analytics
+    """
+    
+    def __init__(self, config: Optional[TrainingConfig] = None):
+        self.config = config or TrainingConfig()
+        self.monitor = PerformanceMonitor()
+        self.quality_analyzer = TextQualityAnalyzer()
+        
+        # Training state
+        self.vocab = None
+        self.merges = {}
+        self.inverse_merges = {}
+        self.word_frequencies = {}
+        self.training_metrics = None
+        
+        # Adaptive learning state
+        self.merge_history = []
+        self.quality_history = []
+        self.learning_rate = 1.0
+        
+        logging.info("Initialized ProfessionalTrainer")
+    
+    def train(self, texts: List[str]) -> Tuple[Dict[str, int], Dict[Tuple[str, str], str]]:
+        """Train BPE model with professional features"""
+        logging.info("Starting professional BPE training...")
+        
+        # Initialize training metrics
+        self.training_metrics = TrainingMetrics(start_time=time.time())
+        
+        try:
+            # Step 1: Validate and prepare training data
+            valid_texts, invalid_texts = AdvancedUtils.validate_text_corpus(texts)
+            if not valid_texts:
+                raise ValueError("No valid training texts found")
+            
+            logging.info(f"Training on {len(valid_texts)} valid texts "
+                        f"({len(invalid_texts)} invalid texts filtered out)")
+            
+            # Step 2: Analyze corpus quality
+            quality_report = self.quality_analyzer.analyze_corpus(valid_texts)
+            self.training_metrics.quality_score = quality_report['overall_quality']
+            self.training_metrics.training_texts = len(valid_texts)
+            
+            logging.info(f"Corpus quality score: {self.training_metrics.quality_score:.2f}")
+            
+            # Step 3: Auto-configure based on corpus analysis
+            if self.config.adaptive_learning:
+                self._adaptive_configure(valid_texts, quality_report)
+            
+            # Step 4: Build initial vocabulary
+            self.word_frequencies = self._build_word_frequencies(valid_texts)
+            self.training_metrics.unique_words = len(self.word_frequencies)
+            
+            logging.info(f"Extracted {len(self.word_frequencies)} unique words")
+            
+            # Step 5: Build character alphabet
+            alphabet = self._build_alphabet(self.word_frequencies)
+            self.training_metrics.initial_vocab_size = len(alphabet)
+            
+            logging.info(f"Built alphabet with {len(alphabet)} characters")
+            
+            # Step 6: Initialize vocabulary
+            self.vocab = {char: i for i, char in enumerate(alphabet)}
+            
+            # Add special tokens
+            for token in self.config.special_tokens:
+                if token not in self.vocab:
+                    self.vocab[token] = len(self.vocab)
+            
+            # Step 7: Prepare word sequences for BPE
+            word_sequences = self._prepare_word_sequences(self.word_frequencies)
+            
+            # Step 8: Learn BPE merges
+            self._learn_merges(word_sequences)
+            
+            # Step 9: Calculate final metrics
+            self._calculate_final_metrics(valid_texts)
+            
+            logging.info("Training completed successfully")
+            
+            return self.vocab, self.merges
+            
+        except Exception as e:
+            logging.error(f"Training failed: {str(e)}")
+            raise
+    
+    def _adaptive_configure(self, texts: List[str], quality_report: Dict[str, Any]) -> None:
+        """Adaptively configure training parameters based on corpus analysis"""
+        total_chars = sum(len(text) for text in texts)
+        total_words = sum(len(text.split()) for text in texts)
+        quality_score = quality_report['overall_quality']
+        
+        # Adjust vocabulary size based on corpus size and quality
+        if self.config.vocab_size is None or self.config.adaptive_learning:
+            base_size = min(5000, max(1000, total_words // 10))
+            
+            # Scale based on quality (higher quality -> larger vocabulary)
+            quality_factor = quality_score / 100.0
+            adjusted_size = int(base_size * (1.0 + quality_factor))
+            
+            # Cap at reasonable maximum
+            self.config.vocab_size = min(adjusted_size, 50000)
+        
+        # Adjust minimum frequency based on corpus characteristics
+        if self.config.adaptive_learning:
+            avg_words_per_text = total_words / len(texts) if texts else 0
+            
+            if avg_words_per_text < 10:
+                self.config.min_frequency = 1
+            elif avg_words_per_text > 100:
+                self.config.min_frequency = max(2, int(avg_words_per_text / 50))
+            
+            # Be more conservative with low-quality data
+            if quality_score < 50:
+                self.config.min_frequency = max(self.config.min_frequency, 3)
+        
+        logging.info(f"Adaptive configuration: vocab_size={self.config.vocab_size}, "
+                    f"min_frequency={self.config.min_frequency}")
+    
+    def _build_word_frequencies(self, texts: List[str]) -> Dict[str, int]:
+        """Build comprehensive word frequencies with subword units"""
+        word_freqs = Counter()
+        
+        for text in texts:
+            # Basic word splitting
+            words = text.split()
+            word_freqs.update(words)
+            
+            # Add character n-grams for languages without spaces
+            if len(text) > 20 and ' ' not in text:
+                for n in [2, 3, 4]:
+                    for i in range(len(text) - n + 1):
+                        ngram = text[i:i+n]
+                        word_freqs[ngram] += 1
+            
+            # Add common prefixes and suffixes
+            for word in words:
+                if len(word) > 4:
+                    # Common prefixes
+                    for prefix_len in [2, 3]:
+                        if len(word) > prefix_len:
+                            prefix = word[:prefix_len]
+                            word_freqs[prefix] += 1
+                    
+                    # Common suffixes
+                    for suffix_len in [2, 3]:
+                        if len(word) > suffix_len:
+                            suffix = word[-suffix_len:]
+                            word_freqs[suffix] += 1
+        
+        return dict(word_freqs)
+    
+    def _build_alphabet(self, word_freqs: Dict[str, int]) -> List[str]:
+        """Build character alphabet with frequency-based sorting"""
+        chars = set()
+        for word in word_freqs.keys():
+            chars.update(word)
+        
+        # Calculate character frequencies
+        char_freqs = Counter()
+        for word, freq in word_freqs.items():
+            for char in word:
+                char_freqs[char] += freq
+        
+        # Sort by frequency (most frequent first)
+        sorted_chars = [char for char, _ in char_freqs.most_common()]
+        
+        return sorted_chars
+    
+    def _prepare_word_sequences(self, word_freqs: Dict[str, int]) -> Dict[str, List[str]]:
+        """Prepare word sequences for BPE training"""
+        word_sequences = {}
+        
+        for word, freq in word_freqs.items():
+            word_sequences[word] = [char for char in word]
+        
+        return word_sequences
+    
+    def _learn_merges(self, word_sequences: Dict[str, List[str]]) -> None:
+        """Learn BPE merges with adaptive stopping criteria"""
+        initial_vocab_size = len(self.vocab)
+        max_merges = min(
+            self.config.vocab_size - initial_vocab_size,
+            self.config.max_merge_operations
+        )
+        
+        logging.info(f"Learning up to {max_merges} merges...")
+        
+        merge_step = 0
+        consecutive_no_improvement = 0
+        best_coverage = 0.0
+        
+        while merge_step < max_merges:
+            # Progress reporting
+            if self.config.progress_callback:
+                progress = (merge_step / max_merges) * 100
+                self.config.progress_callback(progress, f"Merge {merge_step}/{max_merges}")
+            
+            # Get pair frequencies
+            pair_freqs = self._get_pair_frequencies(word_sequences, self.word_frequencies)
+            
+            if not pair_freqs:
+                logging.info("No more merges possible")
+                break
+            
+            # Find best pair to merge
+            best_pair, best_freq = self._select_best_pair(pair_freqs)
+            
+            # Check stopping conditions
+            if best_freq < self.config.min_frequency:
+                logging.info(f"Stopping: best frequency {best_freq} < min frequency {self.config.min_frequency}")
+                break
+            
+            if self.config.adaptive_learning:
+                # Check coverage improvement
+                current_coverage = self._estimate_coverage(list(self.word_frequencies.keys()))
+                if current_coverage <= best_coverage:
+                    consecutive_no_improvement += 1
+                else:
+                    best_coverage = current_coverage
+                    consecutive_no_improvement = 0
+                
+                if (consecutive_no_improvement > 10 and 
+                    current_coverage >= self.config.coverage_threshold):
+                    logging.info(f"Stopping: coverage {current_coverage:.3f} >= threshold {self.config.coverage_threshold}")
+                    break
+            
+            # Perform merge
+            new_token = best_pair[0] + best_pair[1]
+            self.vocab[new_token] = len(self.vocab)
+            self.merges[best_pair] = new_token
+            self.inverse_merges[new_token] = best_pair
+            
+            # Update word sequences
+            self._apply_merge(word_sequences, best_pair, new_token)
+            
+            # Record merge history
+            self.merge_history.append({
+                'step': merge_step,
+                'pair': best_pair,
+                'frequency': best_freq,
+                'new_token': new_token,
+                'vocab_size': len(self.vocab)
+            })
+            
+            merge_step += 1
+            
+            # Periodic logging
+            if (merge_step + 1) % 100 == 0:
+                current_coverage = self._estimate_coverage(list(self.word_frequencies.keys()))
+                logging.info(f"Completed {merge_step + 1} merges, "
+                           f"vocab size: {len(self.vocab)}, "
+                           f"coverage: {current_coverage:.3f}")
+        
+        self.training_metrics.total_merges = merge_step
+        self.training_metrics.final_vocab_size = len(self.vocab)
+    
+    def _get_pair_frequencies(self, 
+                            word_sequences: Dict[str, List[str]], 
+                            word_freqs: Dict[str, int]) -> Dict[Tuple[str, str], int]:
+        """Get frequencies of adjacent pairs with efficiency optimizations"""
+        pair_freqs = Counter()
+        
+        for word, sequence in word_sequences.items():
+            freq = word_freqs[word]
+            for i in range(len(sequence) - 1):
+                pair = (sequence[i], sequence[i + 1])
+                pair_freqs[pair] += freq
+        
+        return dict(pair_freqs)
+    
+    def _select_best_pair(self, pair_freqs: Dict[Tuple[str, str], int]) -> Tuple[Tuple[str, str], int]:
+        """Select the best pair to merge considering multiple factors"""
+        if not pair_freqs:
+            return None, 0
+        
+        best_pair = None
+        best_score = -1
+        
+        for pair, freq in pair_freqs.items():
+            # Base score is frequency
+            score = freq
+            
+            # Apply learning rate
+            score *= self.learning_rate
+            
+            # Prefer merges that create meaningful subwords
+            meaningful_bonus = self._meaningfulness_bonus(pair)
+            score *= (1.0 + meaningful_bonus)
+            
+            if score > best_score:
+                best_score = score
+                best_pair = pair
+        
+        return best_pair, pair_freqs[best_pair]
+    
+    def _meaningfulness_bonus(self, pair: Tuple[str, str]) -> float:
+        """Calculate bonus for meaningful subword combinations"""
+        first, second = pair
+        
+        # Common prefixes and suffixes
+        common_prefixes = {'un', 're', 'pre', 'dis', 'mis', 'non'}
+        common_suffixes = {'ing', 'ed', 'ly', 'er', 'est', 'ment', 'ness', 'ful', 'less'}
+        
+        bonus = 0.0
+        
+        # Check if this looks like a common prefix
+        if first in common_prefixes:
+            bonus += 0.2
+        
+        # Check if this looks like a common suffix
+        if second in common_suffixes:
+            bonus += 0.2
+        
+        # Prefer merges that create actual words or common patterns
+        combined = first + second
+        if len(combined) >= 3 and combined in self.word_frequencies:
+            bonus += 0.3
+        
+        return min(bonus, 0.5)  # Cap the bonus
+    
+    def _apply_merge(self, 
+                   word_sequences: Dict[str, List[str]], 
+                   pair: Tuple[str, str], 
+                   new_token: str) -> None:
+        """Apply merge operation to all word sequences efficiently"""
+        first, second = pair
+        
+        for word, sequence in word_sequences.items():
+            new_sequence = []
+            i = 0
+            while i < len(sequence):
+                if i < len(sequence) - 1 and sequence[i] == first and sequence[i + 1] == second:
+                    new_sequence.append(new_token)
+                    i += 2
+                else:
+                    new_sequence.append(sequence[i])
+                    i += 1
+            word_sequences[word] = new_sequence
+    
+    def _estimate_coverage(self, words: List[str]) -> float:
+        """Estimate vocabulary coverage on sample of words"""
+        if not words or not self.vocab:
+            return 0.0
+        
+        # Sample words for efficiency
+        sample_size = min(1000, len(words))
+        sample_words = words[:sample_size]
+        
+        covered = 0
+        for word in sample_words:
+            # Simulate tokenization
+            tokens = self._simulate_tokenize(word)
+            if all(token in self.vocab for token in tokens):
+                covered += 1
+        
+        return covered / sample_size
+    
+    def _simulate_tokenize(self, word: str) -> List[str]:
+        """Simulate tokenization for coverage estimation"""
+        if not word:
+            return []
+        
+        tokens = list(word)  # Start with characters
+        changed = True
+        
+        while changed and len(tokens) > 1:
+            changed = False
+            
+            # Find the best applicable merge
+            best_pair = None
+            for i in range(len(tokens) - 1):
+                pair = (tokens[i], tokens[i + 1])
+                if pair in self.merges:
+                    best_pair = pair
+                    break
+            
+            if best_pair:
+                # Apply the merge
+                new_tokens = []
+                i = 0
+                while i < len(tokens):
+                    if i < len(tokens) - 1 and (tokens[i], tokens[i + 1]) == best_pair:
+                        new_tokens.append(self.merges[best_pair])
+                        i += 2
+                        changed = True
+                    else:
+                        new_tokens.append(tokens[i])
+                        i += 1
+                tokens = new_tokens
+        
+        return tokens
+    
+    def _calculate_final_metrics(self, texts: List[str]) -> None:
+        """Calculate comprehensive training metrics"""
+        if not self.training_metrics:
+            return
+        
+        self.training_metrics.end_time = time.time()
+        
+        # Calculate compression ratio
+        original_size = sum(len(word) * freq for word, freq in self.word_frequencies.items())
+        compressed_size = 0
+        
+        for word, freq in self.word_frequencies.items():
+            tokens = self._simulate_tokenize(word)
+            compressed_size += len(tokens) * freq
+        
+        if compressed_size > 0:
+            self.training_metrics.compression_ratio = original_size / compressed_size
+        
+        # Calculate final coverage
+        self.training_metrics.corpus_coverage = self._estimate_coverage(list(self.word_frequencies.keys()))
+    
+    def get_training_report(self) -> Dict[str, Any]:
+        """Generate comprehensive training report"""
+        if not self.training_metrics:
+            return {}
+        
+        metrics = self.training_metrics
+        
+        report = {
+            'training_duration': round(metrics.duration, 2),
+            'initial_vocab_size': metrics.initial_vocab_size,
+            'final_vocab_size': metrics.final_vocab_size,
+            'total_merges': metrics.total_merges,
+            'merges_per_second': round(metrics.merges_per_second, 2),
+            'compression_ratio': round(metrics.compression_ratio, 3),
+            'corpus_coverage': round(metrics.corpus_coverage, 3),
+            'training_texts': metrics.training_texts,
+            'unique_words': metrics.unique_words,
+            'quality_score': round(metrics.quality_score, 2),
+            'config': {
+                'vocab_size': self.config.vocab_size,
+                'min_frequency': self.config.min_frequency,
+                'adaptive_learning': self.config.adaptive_learning
+            }
+        }
+        
+        # Add performance metrics
+        perf_metrics = self.monitor.get_metrics('train')
+        if perf_metrics:
+            report['performance'] = perf_metrics
+        
+        return report
+    
+    def save_training_artifacts(self, output_dir: str) -> bool:
+        """Save training artifacts and reports"""
+        import os
+        
+        try:
+            os.makedirs(output_dir, exist_ok=True)
+            
+            # Save vocabulary
+            vocab_path = os.path.join(output_dir, 'vocab.json')
+            AdvancedUtils.safe_json_operation(vocab_path, 'write', self.vocab)
+            
+            # Save merges
+            merges_path = os.path.join(output_dir, 'merges.txt')
+            with open(merges_path, 'w', encoding='utf-8') as f:
+                for (first, second), merged in self.merges.items():
+                    f.write(f"{first} {second}\n")
+            
+            # Save training report
+            report_path = os.path.join(output_dir, 'training_report.json')
+            report = self.get_training_report()
+            AdvancedUtils.safe_json_operation(report_path, 'write', report)
+            
+            # Save merge history
+            history_path = os.path.join(output_dir, 'merge_history.json')
+            AdvancedUtils.safe_json_operation(history_path, 'write', self.merge_history)
+            
+            logging.info(f"Training artifacts saved to {output_dir}")
+            return True
+            
+        except Exception as e:
+            logging.error(f"Error saving training artifacts: {str(e)}")
+            return False
+
+class IncrementalTrainer(ProfessionalTrainer):
+    """Trainer that supports incremental training on new data"""
+    
+    def __init__(self, config: Optional[TrainingConfig] = None):
+        super().__init__(config)
+        self.previous_vocab = None
+        self.previous_merges = None
+    
+    def incremental_train(self, new_texts: List[str], 
+                        existing_vocab: Dict[str, int],
+                        existing_merges: Dict[Tuple[str, str], str]) -> Tuple[Dict[str, int], Dict[Tuple[str, str], str]]:
+        """Perform incremental training on new data"""
+        logging.info("Starting incremental training...")
+        
+        # Store previous state
+        self.previous_vocab = existing_vocab.copy()
+        self.previous_merges = existing_merges.copy()
+        
+        # Start with existing vocabulary and merges
+        self.vocab = existing_vocab.copy()
+        self.merges = existing_merges.copy()
+        self.inverse_merges = {v: k for k, v in existing_merges.items()}
+        
+        # Train on new texts
+        new_vocab, new_merges = self.train(new_texts)
+        
+        # Merge with existing vocabulary
+        merged_vocab = self._merge_vocabularies(existing_vocab, new_vocab)
+        merged_merges = self._merge_merges(existing_merges, new_merges)
+        
+        logging.info(f"Incremental training completed. "
+                    f"Previous vocab: {len(existing_vocab)}, "
+                    f"New vocab: {len(new_vocab)}, "
+                    f"Merged vocab: {len(merged_vocab)}")
+        
+        return merged_vocab, merged_merges
+    
+    def _merge_vocabularies(self, vocab1: Dict[str, int], vocab2: Dict[str, int]) -> Dict[str, int]:
+        """Merge two vocabularies"""
+        merged = vocab1.copy()
+        
+        for token, token_id in vocab2.items():
+            if token not in merged:
+                # Assign new ID
+                merged[token] = len(merged)
+        
+        return merged
+    
+    def _merge_merges(self, merges1: Dict[Tuple[str, str], str], 
+                     merges2: Dict[Tuple[str, str], str]) -> Dict[Tuple[str, str], str]:
+        """Merge two merge dictionaries"""
+        merged = merges1.copy()
+        merged.update(merges2)
+        return merged
+```
+
+6. src/post_processor.py
+
+```python
+"""
+Adaptive Post-Processor with Smart Padding and Truncation
+Pure Python Implementation
+"""
+
+import logging
+import time
+from typing import List, Dict, Any, Optional, Union, Tuple
+from enum import Enum
+
+from .utils import AdvancedUtils, PerformanceMonitor
+
+class PaddingStrategy(Enum):
+    """Padding strategies"""
+    NONE = "none"
+    MAX_LENGTH = "max_length"
+    BATCH_LONGEST = "batch_longest"
+    DYNAMIC = "dynamic"
+
+class TruncationStrategy(Enum):
+    """Truncation strategies"""
+    LONGEST_FIRST = "longest_first"
+    ONLY_FIRST = "only_first"
+    ONLY_SECOND = "only_second"
+    DO_NOT_TRUNCATE = "do_not_truncate"
+
+class SequenceType(Enum):
+    """Sequence types for special token handling"""
+    SINGLE = "single"
+    PAIR = "pair"
+    MULTI_TURN = "multi_turn"
+
+class AdaptivePostProcessor:
+    """
+    Advanced post-processor with adaptive strategies,
+    sequence type detection, and comprehensive formatting
+    """
+    
+    def __init__(self, 
+                 max_length: Optional[int] = 512,
+                 padding_strategy: Union[str, PaddingStrategy] = PaddingStrategy.DYNAMIC,
+                 truncation_strategy: Union[str, TruncationStrategy] = TruncationStrategy.LONGEST_FIRST,
+                 add_special_tokens: bool = True):
+        
+        self.max_length = max_length
+        self.padding_strategy = self._parse_padding_strategy(padding_strategy)
+        self.truncation_strategy = self._parse_truncation_strategy(truncation_strategy)
+        self.add_special_tokens = add_special_tokens
+        
+        # Performance monitoring
+        self.monitor = PerformanceMonitor()
+        
+        # Adaptive configuration
+        self.sequence_length_history = []
+        self.adaptive_limits = {}
+        self.processing_stats = {
+            'total_sequences': 0,
+            'truncated_sequences': 0,
+            'padded_sequences': 0,
+            'avg_sequence_length': 0.0
+        }
+        
+        # Special token templates
+        self.special_token_templates = {
+            SequenceType.SINGLE: {
+                'bos': True,
+                'eos': True,
+                'cls': False,
+                'sep': False
+            },
+            SequenceType.PAIR: {
+                'bos': False,
+                'eos': False,
+                'cls': True,
+                'sep': True
+            },
+            SequenceType.MULTI_TURN: {
+                'bos': True,
+                'eos': True,
+                'cls': False,
+                'sep': True
+            }
+        }
+        
+        logging.info("Initialized AdaptivePostProcessor")
+    
+    def _parse_padding_strategy(self, strategy: Union[str, PaddingStrategy]) -> PaddingStrategy:
+        """Parse padding strategy from string or enum"""
+        if isinstance(strategy, PaddingStrategy):
+            return strategy
+        
+        strategy_map = {
+            'none': PaddingStrategy.NONE,
+            'max_length': PaddingStrategy.MAX_LENGTH,
+            'batch_longest': PaddingStrategy.BATCH_LONGEST,
+            'dynamic': PaddingStrategy.DYNAMIC
+        }
+        
+        return strategy_map.get(strategy.lower(), PaddingStrategy.DYNAMIC)
+    
+    def _parse_truncation_strategy(self, strategy: Union[str, TruncationStrategy]) -> TruncationStrategy:
+        """Parse truncation strategy from string or enum"""
+        if isinstance(strategy, TruncationStrategy):
+            return strategy
+        
+        strategy_map = {
+            'longest_first': TruncationStrategy.LONGEST_FIRST,
+            'only_first': TruncationStrategy.ONLY_FIRST,
+            'only_second': TruncationStrategy.ONLY_SECOND,
+            'do_not_truncate': TruncationStrategy.DO_NOT_TRUNCATE
+        }
+        
+        return strategy_map.get(strategy.lower(), TruncationStrategy.LONGEST_FIRST)
+    
+    def process(self, 
+                token_ids: List[int],
+                vocab: Any,
+                pair_ids: Optional[List[int]] = None,
+                sequence_type: Optional[Union[str, SequenceType]] = None,
+                **kwargs) -> Dict[str, Any]:
+        """
+        Process token sequence with adaptive strategies
+        
+        Args:
+            token_ids: Primary sequence token IDs
+            vocab: Vocabulary instance
+            pair_ids: Optional second sequence token IDs
+            sequence_type: Type of sequence (single, pair, multi_turn)
+            **kwargs: Additional processing parameters
+        
+        Returns:
+            Processed token sequence with metadata
+        """
+        start_time = time.time()
+        
+        try:
+            # Determine sequence type
+            seq_type = self._determine_sequence_type(sequence_type, pair_ids)
+            
+            # Auto-configure if using dynamic strategies
+            if self.padding_strategy == PaddingStrategy.DYNAMIC:
+                self._adaptive_configure(token_ids, pair_ids)
+            
+            # Apply processing pipeline
+            processed_ids = token_ids.copy()
+            
+            # Add special tokens based on sequence type
+            if self.add_special_tokens:
+                processed_ids = self._add_special_tokens(processed_ids, vocab, pair_ids, seq_type)
+            
+            # Handle sequence pairs
+            if pair_ids is not None:
+                processed_ids = self._process_sequence_pair(processed_ids, pair_ids, vocab, seq_type)
+            
+            # Apply truncation if needed
+            original_length = len(processed_ids)
+            if self.max_length and len(processed_ids) > self.max_length:
+                processed_ids = self._apply_truncation(processed_ids, vocab, seq_type)
+                self.processing_stats['truncated_sequences'] += 1
+            
+            # Create attention mask
+            attention_mask = [1] * len(processed_ids)
+            
+            # Apply padding if needed
+            if self.padding_strategy != PaddingStrategy.NONE:
+                processed_ids, attention_mask = self._apply_padding(processed_ids, attention_mask, vocab)
+                if len(processed_ids) > original_length:
+                    self.processing_stats['padded_sequences'] += 1
+            
+            # Prepare result
+            result = {
+                'input_ids': processed_ids,
+                'attention_mask': attention_mask,
+                'token_type_ids': self._create_token_type_ids(processed_ids, vocab, seq_type),
+                'sequence_type': seq_type.value,
+                'original_length': original_length,
+                'processed_length': len(processed_ids),
+                'was_truncated': len(processed_ids) < original_length,
+                'was_padded': len(processed_ids) > original_length
+            }
+            
+            # Update statistics and history
+            self._update_processing_stats(result)
+            
+            duration = time.time() - start_time
+            self.monitor.record_metric('process', duration, 
+                                     sequence_length=len(processed_ids),
+                                     sequence_type=seq_type.value)
+            
+            return result
+            
+        except Exception as e:
+            logging.error(f"Post-processing error: {str(e)}")
+            raise
+    
+    def _determine_sequence_type(self, 
+                               sequence_type: Optional[Union[str, SequenceType]],
+                               pair_ids: Optional[List[int]]) -> SequenceType:
+        """Determine the type of sequence"""
+        if sequence_type is not None:
+            if isinstance(sequence_type, str):
+                try:
+                    return SequenceType(sequence_type.lower())
+                except ValueError:
+                    pass
+            elif isinstance(sequence_type, SequenceType):
+                return sequence_type
+        
+        # Auto-detect based on presence of pair_ids
+        if pair_ids is not None:
+            return SequenceType.PAIR
+        else:
+            return SequenceType.SINGLE
+    
+    def _adaptive_configure(self, token_ids: List[int], pair_ids: Optional[List[int]]) -> None:
+        """Adaptively configure processing parameters based on sequence characteristics"""
+        sequence_length = len(token_ids)
+        if pair_ids is not None:
+            sequence_length += len(pair_ids)
+        
+        # Update sequence length history
+        self.sequence_length_history.append(sequence_length)
+        if len(self.sequence_length_history) > 1000:
+            self.sequence_length_history = self.sequence_length_history[-500:]
+        
+        # Calculate adaptive max length
+        if self.sequence_length_history:
+            avg_length = sum(self.sequence_length_history) / len(self.sequence_length_history)
+            std_length = (sum((x - avg_length) ** 2 for x in self.sequence_length_history) / 
+                         len(self.sequence_length_history)) ** 0.5
+            
+            # Set max length to cover 95% of sequences
+            adaptive_max_length = min(512, int(avg_length + 2 * std_length))
+            self.adaptive_limits['max_length'] = max(64, adaptive_max_length)
+            
+            # Adjust padding strategy based on sequence length distribution
+            if avg_length < self.adaptive_limits['max_length'] * 0.7:
+                self.padding_strategy = PaddingStrategy.MAX_LENGTH
+            else:
+                self.padding_strategy = PaddingStrategy.NONE
+    
+    def _add_special_tokens(self, 
+                          token_ids: List[int],
+                          vocab: Any,
+                          pair_ids: Optional[List[int]],
+                          sequence_type: SequenceType) -> List[int]:
+        """Add special tokens based on sequence type"""
+        template = self.special_token_templates.get(sequence_type, {})
+        processed = []
+        
+        # Beginning of sequence
+        if template.get('bos', False) and hasattr(vocab, 'bos_token') and vocab.bos_token:
+            processed.append(vocab.token_to_id(vocab.bos_token))
+        
+        # Classification token (for sequence pairs)
+        if template.get('cls', False) and hasattr(vocab, 'cls_token') and vocab.cls_token:
+            processed.append(vocab.token_to_id(vocab.cls_token))
+        
+        # Primary sequence
+        processed.extend(token_ids)
+        
+        # Separator token
+        if template.get('sep', False) and hasattr(vocab, 'sep_token') and vocab.sep_token:
+            processed.append(vocab.token_to_id(vocab.sep_token))
+            
+            # Add second sequence if provided
+            if pair_ids is not None:
+                processed.extend(pair_ids)
+                processed.append(vocab.token_to_id(vocab.sep_token))
+        
+        # End of sequence
+        if template.get('eos', False) and hasattr(vocab, 'eos_token') and vocab.eos_token:
+            processed.append(vocab.token_to_id(vocab.eos_token))
+        
+        return processed
+    
+    def _process_sequence_pair(self, 
+                             processed_ids: List[int],
+                             pair_ids: List[int],
+                             vocab: Any,
+                             sequence_type: SequenceType) -> List[int]:
+        """Process sequence pair with proper special tokens"""
+        if sequence_type != SequenceType.PAIR:
+            return processed_ids
+        
+        # For pair sequences, we use CLS and SEP tokens
+        if (hasattr(vocab, 'cls_token') and vocab.cls_token and
+            hasattr(vocab, 'sep_token') and vocab.sep_token):
+            
+            cls_id = vocab.token_to_id(vocab.cls_token)
+            sep_id = vocab.token_to_id(vocab.sep_token)
+            
+            # Reconstruct with CLS + seq1 + SEP + seq2 + SEP
+            new_sequence = [cls_id]
+            new_sequence.extend(processed_ids)
+            new_sequence.append(sep_id)
+            new_sequence.extend(pair_ids)
+            new_sequence.append(sep_id)
+            
+            return new_sequence
+        
+        return processed_ids
+    
+    def _apply_truncation(self, 
+                         token_ids: List[int],
+                         vocab: Any,
+                         sequence_type: SequenceType) -> List[int]:
+        """Apply truncation based on strategy"""
+        if self.truncation_strategy == TruncationStrategy.DO_NOT_TRUNCATE:
+            return token_ids
+        
+        max_len = self.max_length or self.adaptive_limits.get('max_length', 512)
+        
+        if len(token_ids) <= max_len:
+            return token_ids
+        
+        if self.truncation_strategy == TruncationStrategy.LONGEST_FIRST:
+            return self._truncate_longest_first(token_ids, max_len)
+        elif self.truncation_strategy == TruncationStrategy.ONLY_FIRST:
+            return token_ids[:max_len]
+        elif self.truncation_strategy == TruncationStrategy.ONLY_SECOND:
+            return token_ids[-max_len:]
+        else:
+            return token_ids[:max_len]
+    
+    def _truncate_longest_first(self, token_ids: List[int], max_len: int) -> List[int]:
+        """Truncate by removing tokens from the middle (preserving start and end)"""
+        if len(token_ids) <= max_len:
+            return token_ids
+        
+        # Preserve beginning and end, remove from middle
+        start_len = max_len // 2
+        end_len = max_len - start_len
+        
+        truncated = token_ids[:start_len] + token_ids[-end_len:]
+        return truncated
+    
+    def _apply_padding(self, 
+                      token_ids: List[int],
+                      attention_mask: List[int],
+                      vocab: Any) -> Tuple[List[int], List[int]]:
+        """Apply padding based on strategy"""
+        current_length = len(token_ids)
+        
+        if self.padding_strategy == PaddingStrategy.NONE:
+            return token_ids, attention_mask
+        
+        # Determine target length
+        if self.padding_strategy == PaddingStrategy.MAX_LENGTH:
+            target_length = self.max_length or 512
+        elif self.padding_strategy == PaddingStrategy.BATCH_LONGEST:
+            # For single sequence, use adaptive length
+            target_length = self.adaptive_limits.get('max_length', 512)
+        else:  # DYNAMIC
+            target_length = self.adaptive_limits.get('max_length', 512)
+        
+        if current_length >= target_length:
+            return token_ids, attention_mask
+        
+        pad_length = target_length - current_length
+        
+        # Get padding token ID
+        pad_token_id = 0
+        if hasattr(vocab, 'pad_token') and vocab.pad_token:
+            pad_token_id = vocab.token_to_id(vocab.pad_token)
+        
+        # Apply padding
+        padded_ids = token_ids + [pad_token_id] * pad_length
+        padded_mask = attention_mask + [0] * pad_length
+        
+        return padded_ids, padded_mask
+    
+    def _create_token_type_ids(self, 
+                             token_ids: List[int],
+                             vocab: Any,
+                             sequence_type: SequenceType) -> Optional[List[int]]:
+        """Create token type IDs for sequence pairs"""
+        if sequence_type != SequenceType.PAIR:
+            return None
+        
+        # For pair sequences, create segment IDs: 0 for first sequence, 1 for second
+        if not hasattr(vocab, 'sep_token') or not vocab.sep_token:
+            return None
+        
+        sep_id = vocab.token_to_id(vocab.sep_token)
+        
+        # Find separator positions
+        sep_positions = [i for i, token_id in enumerate(token_ids) if token_id == sep_id]
+        
+        if len(sep_positions) < 2:
+            return [0] * len(token_ids)
+        
+        # First SEP marks end of first sequence, second SEP marks end of second sequence
+        token_type_ids = []
+        current_type = 0
+        
+        for i, token_id in enumerate(token_ids):
+            token_type_ids.append(current_type)
+            if i in sep_positions:
+                if current_type == 0 and len(sep_positions) > 1:
+                    # Switch to type 1 after first SEP (but not for the final SEP)
+                    if i != sep_positions[-1]:
+                        current_type = 1
+        
+        return token_type_ids
+    
+    def _update_processing_stats(self, result: Dict[str, Any]) -> None:
+        """Update processing statistics"""
+        self.processing_stats['total_sequences'] += 1
+        
+        # Update average sequence length
+        current_avg = self.processing_stats['avg_sequence_length']
+        new_length = result['processed_length']
+        total_sequences = self.processing_stats['total_sequences']
+        
+        self.processing_stats['avg_sequence_length'] = (
+            (current_avg * (total_sequences - 1) + new_length) / total_sequences
+        )
+    
+    def batch_process(self, 
+                     batch_token_ids: List[List[int]],
+                     vocab: Any,
+                     batch_pair_ids: Optional[List[List[int]]] = None,
+                     **kwargs) -> List[Dict[str, Any]]:
+        """Process a batch of sequences efficiently"""
+        start_time = time.time()
+        
+        results = []
+        for i, token_ids in enumerate(batch_token_ids):
+            pair_ids = None
+            if batch_pair_ids and i < len(batch_pair_ids):
+                pair_ids = batch_pair_ids[i]
+            
+            result = self.process(token_ids, vocab, pair_ids, **kwargs)
+            results.append(result)
+        
+        duration = time.time() - start_time
+        self.monitor.record_metric('batch_process', duration, 
+                                 batch_size=len(batch_token_ids))
+        
+        return results
+    
+    def get_processing_statistics(self) -> Dict[str, Any]:
+        """Get comprehensive processing statistics"""
+        stats = self.processing_stats.copy()
+        
+        # Add performance metrics
+        perf_metrics = self.monitor.get_metrics('process')
+        if perf_metrics:
+            stats['performance'] = perf_metrics
+        
+        # Add adaptive configuration
+        stats['adaptive_config'] = {
+            'max_length': self.max_length,
+            'adaptive_max_length': self.adaptive_limits.get('max_length'),
+            'padding_strategy': self.padding_strategy.value,
+            'truncation_strategy': self.truncation_strategy.value,
+            'recent_sequence_lengths': len(self.sequence_length_history)
+        }
+        
+        return stats
+    
+    def reset_statistics(self) -> None:
+        """Reset processing statistics"""
+        self.processing_stats = {
+            'total_sequences': 0,
+            'truncated_sequences': 0,
+            'padded_sequences': 0,
+            'avg_sequence_length': 0.0
+        }
+        self.sequence_length_history.clear()
+        self.adaptive_limits.clear()
+        
+        logging.info("Post-processor statistics reset")
+
+class MultiModalPostProcessor(AdaptivePostProcessor):
+    """Post-processor with multi-modal support (text, image, audio tokens)"""
+    
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.modal_special_tokens = {
+            'image': ['[IMAGE_START]', '[IMAGE_END]'],
+            'audio': ['[AUDIO_START]', '[AUDIO_END]'],
+            'video': ['[VIDEO_START]', '[VIDEO_END]']
+        }
+    
+    def process_multi_modal(self,
+                          text_token_ids: List[int],
+                          modal_token_ids: Dict[str, List[int]],
+                          vocab: Any,
+                          **kwargs) -> Dict[str, Any]:
+        """Process multi-modal input with different modality tokens"""
+        # Start with text tokens
+        all_token_ids = text_token_ids.copy()
+        
+        # Add modal tokens in sequence
+        for modality, tokens in modal_token_ids.items():
+            if modality in self.modal_special_tokens:
+                start_token, end_token = self.modal_special_tokens[modality]
+                
+                # Add modality start token
+                if hasattr(vocab, start_token):
+                    all_token_ids.append(vocab.token_to_id(getattr(vocab, start_token)))
+                
+                # Add modality tokens
+                all_token_ids.extend(tokens)
+                
+                # Add modality end token
+                if hasattr(vocab, end_token):
+                    all_token_ids.append(vocab.token_to_id(getattr(vocab, end_token)))
+        
+        # Process combined sequence
+        return self.process(all_token_ids, vocab, **kwargs)
+```
+
+7. src/tokenizer.py
+
+```python
+"""
+Professional Tokenizer with Advanced Features and Auto-Training
+Pure Python Implementation
+"""
+
+import os
+import logging
+import time
+import json
+from typing import List, Dict, Tuple, Optional, Union, Any, Callable
+from datetime import datetime
+
+from .vocabulary import SmartVocabulary
+from .pre_tokenizer import MultiLanguagePreTokenizer
+from .post_processor import AdaptivePostProcessor
+from .trainers import ProfessionalTrainer, TrainingConfig, IncrementalTrainer
+from .utils import AdvancedUtils, PerformanceMonitor, TextQualityAnalyzer
+
+class TokenizerConfig:
+    """Configuration for the professional tokenizer"""
+    
+    def __init__(self,
+                 model_dir: str = "models/trained_model",
+                 auto_train: bool = True,
+                 auto_update: bool = True,
+                 max_vocab_size: int = 50000,
+                 min_training_samples: int = 10,
+                 language: str = "english",
+                 strategies: List[str] = None,
+                 special_tokens: List[str] = None):
+        
+        self.model_dir = model_dir
+        self.auto_train = auto_train
+        self.auto_update = auto_update
+        self.max_vocab_size = max_vocab_size
+        self.min_training_samples = min_training_samples
+        self.language = language
+        
+        self.strategies = strategies or [
+            'whitespace', 'punctuation', 'numbers', 
+            'urls', 'emails', 'dates', 'times'
+        ]
+        
+        self.special_tokens = special_tokens or [
+            '[UNK]', '[PAD]', '[BOS]', '[EOS]', 
+            '[CLS]', '[SEP]', '[MASK]',
+            '[NUM]', '[URL]', '[EMAIL]', '[DATE]', '[TIME]'
+        ]
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert configuration to dictionary"""
+        return {
+            'model_dir': self.model_dir,
+            'auto_train': self.auto_train,
+            'auto_update': self.auto_update,
+            'max_vocab_size': self.max_vocab_size,
+            'min_training_samples': self.min_training_samples,
+            'language': self.language,
+            'strategies': self.strategies,
+            'special_tokens': self.special_tokens
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'TokenizerConfig':
+        """Create configuration from dictionary"""
+        config = cls()
+        for key, value in data.items():
+            if hasattr(config, key):
+                setattr(config, key, value)
+        return config
+
+class ProfessionalTokenizer:
+    """
+    Professional tokenizer with automatic training,
+    multi-language support, and comprehensive analytics
+    """
+    
+    def __init__(self, config: Optional[TokenizerConfig] = None):
+        self.config = config or TokenizerConfig()
+        self.initialized = False
+        self.trained = False
+        
+        # Core components
+        self.vocabulary: Optional[SmartVocabulary] = None
+        self.pre_tokenizer: Optional[MultiLanguagePreTokenizer] = None
+        self.post_processor: Optional[AdaptivePostProcessor] = None
+        self.trainer: Optional[ProfessionalTrainer] = None
+        
+        # Tokenization state
+        self.merges = {}
+        self.inverse_merges = {}
+        
+        # Analytics and monitoring
+        self.monitor = PerformanceMonitor()
+        self.quality_analyzer = TextQualityAnalyzer()
+        self.usage_statistics = {
+            'total_encodings': 0,
+            'total_decodings': 0,
+            'total_tokens_generated': 0,
+            'average_encoding_time': 0.0,
+            'average_decoding_time': 0.0,
+            'language_usage': {},
+            'token_distribution': {}
+        }
+        
+        # Training history
+        self.training_history = []
+        
+        # Initialize components
+        self._initialize_components()
+        
+        # Load or create model
+        self._initialize_model()
+        
+        self.initialized = True
+        logging.info("ProfessionalTokenizer initialized successfully")
+    
+    def _initialize_components(self) -> None:
+        """Initialize tokenizer components with professional configuration"""
+        # Vocabulary
+        self.vocabulary = SmartVocabulary()
+        
+        # Pre-tokenizer
+        self.pre_tokenizer = MultiLanguagePreTokenizer(
+            language=self.config.language,
+            strategies=self.config.strategies,
+            lowercase=True,
+            strip_accents=False,
+            preserve_case_tokens=['I', 'USA', 'UK']  # Common case-sensitive tokens
+        )
+        
+        # Post-processor
+        self.post_processor = AdaptivePostProcessor(
+            max_length=512,
+            padding_strategy='dynamic',
+            truncation_strategy='longest_first',
+            add_special_tokens=True
+        )
+        
+        # Trainer
+        training_config = TrainingConfig(
+            vocab_size=self.config.max_vocab_size,
+            min_frequency=2,
+            special_tokens=self.config.special_tokens,
+            adaptive_learning=True
+        )
+        self.trainer = ProfessionalTrainer(training_config)
+    
+    def _initialize_model(self) -> None:
+        """Initialize model - load existing or create new"""
+        vocab_path = os.path.join(self.config.model_dir, 'vocab.json')
+        
+        if os.path.exists(vocab_path):
+            logging.info("Loading existing tokenizer model...")
+            success = self.load_model(self.config.model_dir)
+            if success:
+                logging.info(f"Model loaded successfully. Vocab size: {self.vocab_size}")
+                self.trained = True
+            else:
+                logging.warning("Failed to load existing model. Creating new model.")
+                self._create_new_model()
+        else:
+            logging.info("No existing model found. Creating new model.")
+            self._create_new_model()
+    
+    def _create_new_model(self) -> None:
+        """Create new model with basic vocabulary"""
+        # Vocabulary is already initialized with special tokens
+        self.trained = False
+        logging.info("Created new tokenizer model")
+    
+    def train(self, 
+              training_data: Union[str, List[str]],
+              save_model: bool = True,
+              incremental: bool = False,
+              progress_callback: Optional[Callable] = None) -> bool:
+        """
+        Train tokenizer with professional features
+        
+        Args:
+            training_data: File path or list of texts
+            save_model: Whether to save the trained model
+            incremental: Whether to perform incremental training
+            progress_callback: Callback for training progress
+        
+        Returns:
+            Success status
+        """
+        logging.info("Starting professional tokenizer training...")
+        
+        try:
+            # Load training data
+            texts = self._load_training_data(training_data)
+            if not texts:
+                logging.error("No training data available")
+                return False
+            
+            logging.info(f"Training on {len(texts)} samples")
+            
+            # Validate training data quality
+            quality_report = self.quality_analyzer.analyze_corpus(texts)
+            if quality_report['overall_quality'] < 30:
+                logging.warning(f"Low training data quality: {quality_report['overall_quality']}")
+            
+            # Set progress callback
+            if progress_callback:
+                self.trainer.config.progress_callback = progress_callback
+            
+            # Choose training strategy
+            if incremental and self.trained:
+                logging.info("Performing incremental training...")
+                incremental_trainer = IncrementalTrainer(self.trainer.config)
+                vocab, merges = incremental_trainer.incremental_train(
+                    texts, self.vocabulary.vocab, self.merges
+                )
+            else:
+                # Standard training
+                vocab, merges = self.trainer.train(texts)
+            
+            # Update tokenizer state
+            self.vocabulary = SmartVocabulary(vocab)
+            self.merges = merges
+            self.inverse_merges = {v: k for k, v in merges.items()}
+            self.trained = True
+            
+            # Record training history
+            training_record = {
+                'timestamp': datetime.now().isoformat(),
+                'samples': len(texts),
+                'vocab_size': len(vocab),
+                'merges': len(merges),
+                'quality_score': quality_report['overall_quality'],
+                'incremental': incremental
+            }
+            self.training_history.append(training_record)
+            
+            # Save training artifacts
+            if save_model:
+                self.save_model(self.config.model_dir)
+                self.trainer.save_training_artifacts(
+                    os.path.join(self.config.model_dir, 'training_artifacts')
+                )
+            
+            # Log training results
+            training_report = self.trainer.get_training_report()
+            logging.info(f"Training completed. Final vocab size: {self.vocab_size}")
+            logging.info(f"Training report: {training_report}")
+            
+            return True
+            
+        except Exception as e:
+            logging.error(f"Training failed: {str(e)}")
+            return False
+    
+    def _load_training_data(self, training_data: Union[str, List[str]]) -> List[str]:
+        """Load and validate training data"""
+        if isinstance(training_data, str):
+            # File path provided
+            if not os.path.exists(training_data):
+                logging.error(f"Training file not found: {training_data}")
+                return []
+            
+            try:
+                with open(training_data, 'r', encoding='utf-8') as f:
+                    texts = [line.strip() for line in f if line.strip()]
+            except Exception as e:
+                logging.error(f"Error reading training file: {str(e)}")
+                return []
+        else:
+            # List of texts provided
+            texts = [text.strip() for text in training_data if text.strip()]
+        
+        # Validate and clean texts
+        valid_texts, invalid_texts = AdvancedUtils.validate_text_corpus(texts)
+        
+        if invalid_texts:
+            logging.warning(f"Filtered out {len(invalid_texts)} invalid texts")
+        
+        return valid_texts
+    
+    def encode(self, 
+               text: str,
+               add_special_tokens: bool = True,
+               max_length: Optional[int] = None,
+               padding: bool = False,
+               return_offsets: bool = False,
+               language: Optional[str] = None,
+               **kwargs) -> Dict[str, Any]:
+        """
+        Encode text with professional features
+        
+        Args:
+            text: Input text to encode
+            add_special_tokens: Whether to add special tokens
+            max_length: Maximum sequence length
+            padding: Whether to apply padding
+            return_offsets: Whether to return token offsets
+            language: Language hint for pre-tokenization
+            **kwargs: Additional encoding parameters
+        
+        Returns:
+            Encoding result with metadata
+        """
+        if not self.initialized:
+            raise ValueError("Tokenizer not initialized")
+        
+        if not text or not isinstance(text, str):
+            raise ValueError("Invalid input text")
+        
+        # Auto-train if needed and enabled
+        if not self.trained and self.config.auto_train:
+            logging.info("Auto-training tokenizer with input text...")
+            self.train([text], save_model=True)
+        
+        if not self.trained:
+            raise ValueError("Tokenizer not trained")
+        
+        start_time = time.time()
+        
+        try:
+            # Prepare context for pre-tokenization
+            context = {}
+            if language:
+                context['language'] = language
+            else:
+                context['language'] = self.config.language
+            
+            # Pre-tokenize
+            pre_tokenize_result = self.pre_tokenizer.pre_tokenize(
+                text, return_offsets=return_offsets, context=context
+            )
+            
+            if return_offsets:
+                pre_tokens, offsets = pre_tokenize_result
+            else:
+                pre_tokens = pre_tokenize_result
+                offsets = None
+            
+            # Apply BPE tokenization
+            token_ids = []
+            sub_token_mapping = []
+            
+            for i, token in enumerate(pre_tokens):
+                if token in self.vocabulary:
+                    token_ids.append(self.vocabulary.token_to_id(token))
+                    sub_token_mapping.append((i, [len(token_ids) - 1]))
+                else:
+                    # Apply BPE merges
+                    sub_tokens = self._apply_bpe(token)
+                    sub_token_ids = []
+                    
+                    for sub_token in sub_tokens:
+                        token_id = self.vocabulary.token_to_id(sub_token)
+                        token_ids.append(token_id)
+                        sub_token_ids.append(len(token_ids) - 1)
+                    
+                    sub_token_mapping.append((i, sub_token_ids))
+            
+            # Post-process
+            processing_config = {
+                'add_special_tokens': add_special_tokens,
+                'max_length': max_length or self.post_processor.max_length,
+                'padding': padding
+            }
+            processing_config.update(kwargs)
+            
+            result = self.post_processor.process(token_ids, self.vocabulary, **processing_config)
+            
+            # Add additional metadata
+            result.update({
+                'pre_tokens': pre_tokens,
+                'sub_token_mapping': sub_token_mapping,
+                'language': context['language'],
+                'encoding_metadata': {
+                    'pre_token_count': len(pre_tokens),
+                    'token_count': len(token_ids),
+                    'vocab_size': self.vocab_size
+                }
+            })
+            
+            # Add offsets if requested
+            if return_offsets and offsets is not None:
+                result['offsets'] = offsets
+            
+            # Update usage statistics
+            self._update_encoding_stats(text, result, start_time)
+            
+            return result
+            
+        except Exception as e:
+            logging.error(f"Encoding error: {str(e)}")
+            raise
+    
+    def decode(self, 
+               token_ids: List[int],
+               skip_special_tokens: bool = True,
+               clean_up_tokenization_spaces: bool = True,
+               **kwargs) -> str:
+        """
+        Decode token IDs back to text
+        
+        Args:
+            token_ids: List of token IDs to decode
+            skip_special_tokens: Whether to skip special tokens
+            clean_up_tokenization_spaces: Clean up extra spaces
+            **kwargs: Additional decoding parameters
+        
+        Returns:
+            Decoded text
+        """
+        if not self.trained:
+            raise ValueError("Tokenizer not trained")
+        
+        if not token_ids or not isinstance(token_ids, list):
+            raise ValueError("Invalid token IDs")
+        
+        start_time = time.time()
+        
+        try:
+            tokens = []
+            for token_id in token_ids:
+                token = self.vocabulary.id_to_token(token_id)
+                
+                # Handle special tokens
+                if skip_special_tokens and self._is_special_token(token):
+                    continue
+                
+                # Apply inverse BPE if needed
+                if token in self.inverse_merges:
+                    first, second = self.inverse_merges[token]
+                    tokens.extend([first, second])
+                else:
+                    tokens.append(token)
+            
+            # Reconstruct text
+            decoded_text = ''.join(tokens)
+            
+            # Clean up spaces
+            if clean_up_tokenization_spaces:
+                decoded_text = self._clean_up_spaces(decoded_text)
+            
+            # Update usage statistics
+            self._update_decoding_stats(token_ids, decoded_text, start_time)
+            
+            return decoded_text
+            
+        except Exception as e:
+            logging.error(f"Decoding error: {str(e)}")
+            raise
+    
+    def _apply_bpe(self, token: str) -> List[str]:
+        """Apply BPE merges to token"""
+        if not token or len(token) == 1:
+            return [token]
+        
+        tokens = list(token)
+        changed = True
+        
+        while changed and len(tokens) > 1:
+            changed = False
+            best_pair = None
+            best_position = float('inf')
+            
+            # Find the best merge
+            for i in range(len(tokens) - 1):
+                pair = (tokens[i], tokens[i + 1])
+                if pair in self.merges:
+                    if i < best_position:
+                        best_pair = pair
+                        best_position = i
+            
+            if best_pair:
+                # Apply the merge
+                new_tokens = []
+                i = 0
+                while i < len(tokens):
+                    if i < len(tokens) - 1 and (tokens[i], tokens[i + 1]) == best_pair:
+                        new_tokens.append(self.merges[best_pair])
+                        i += 2
+                        changed = True
+                    else:
+                        new_tokens.append(tokens[i])
+                        i += 1
+                tokens = new_tokens
+        
+        return tokens
+    
+    def _is_special_token(self, token: str) -> bool:
+        """Check if token is a special token"""
+        return (token.startswith('[') and token.endswith(']') and 
+                token in self.vocabulary.special_tokens)
+    
+    def _clean_up_spaces(self, text: str) -> str:
+        """Clean up tokenization spaces"""
+        # Add space before punctuation (except when it's already there)
+        text = re.sub(r'\s+([.,!?;:])', r'\1', text)
+        text = re.sub(r'([.,!?;:])(\w)', r'\1 \2', text)
+        
+        # Normalize whitespace
+        text = re.sub(r'\s+', ' ', text)
+        
+        return text.strip()
+    
+    def _update_encoding_stats(self, text: str, result: Dict[str, Any], start_time: float) -> None:
+        """Update encoding statistics"""
+        duration = time.time() - start_time
+        
+        self.usage_statistics['total_encodings'] += 1
+        self.usage_statistics['total_tokens_generated'] += len(result['input_ids'])
+        
+        # Update average encoding time
+        current_avg = self.usage_statistics['average_encoding_time']
+        total_encodings = self.usage_statistics['total_encodings']
+        
+        self.usage_statistics['average_encoding_time'] = (
+            (current_avg * (total_encodings - 1) + duration) / total_encodings
+        )
+        
+        # Update language usage
+        language = result.get('language', 'unknown')
+        self.usage_statistics['language_usage'][language] = \
+            self.usage_statistics['language_usage'].get(language, 0) + 1
+        
+        # Record performance metric
+        self.monitor.record_metric('encode', duration, 
+                                 text_length=len(text),
+                                 token_count=len(result['input_ids']))
+    
+    def _update_decoding_stats(self, token_ids: List[int], decoded_text: str, start_time: float) -> None:
+        """Update decoding statistics"""
+        duration = time.time() - start_time
+        
+        self.usage_statistics['total_decodings'] += 1
+        
+        # Update average decoding time
+        current_avg = self.usage_statistics['average_decoding_time']
+        total_decodings = self.usage_statistics['total_decodings']
+        
+        self.usage_statistics['average_decoding_time'] = (
+            (current_avg * (total_decodings - 1) + duration) / total_decodings
+        )
+        
+        # Record performance metric
+        self.monitor.record_metric('decode', duration, 
+                                 token_count=len(token_ids),
+                                 text_length=len(decoded_text))
+    
+    def batch_encode(self, 
+                     texts: List[str],
+                     **kwargs) -> List[Dict[str, Any]]:
+        """Batch encode multiple texts efficiently"""
+        start_time = time.time()
+        
+        results = []
+        for text in texts:
+            try:
+                result = self.encode(text, **kwargs)
+                results.append(result)
+            except Exception as e:
+                logging.error(f"Batch encoding error for text: {e}")
+                results.append({'error': str(e)})
+        
+        duration = time.time() - start_time
+        self.monitor.record_metric('batch_encode', duration, batch_size=len(texts))
+        
+        return results
+    
+    def save_model(self, model_dir: str) -> bool:
+        """Save complete model to directory"""
+        try:
+            os.makedirs(model_dir, exist_ok=True)
+            
+            # Save vocabulary
+            vocab_path = os.path.join(model_dir, 'vocab.json')
+            if not self.vocabulary.save(vocab_path):
+                return False
+            
+            # Save merges
+            merges_path = os.path.join(model_dir, 'merges.txt')
+            with open(merges_path, 'w', encoding='utf-8') as f:
+                for (first, second), merged in self.merges.items():
+                    f.write(f"{first} {second}\n")
+            
+            # Save configuration
+            config_path = os.path.join(model_dir, 'tokenizer_config.json')
+            config_data = {
+                'config': self.config.to_dict(),
+                'usage_statistics': self.usage_statistics,
+                'training_history': self.training_history,
+                'is_trained': self.trained,
+                'version': '3.0.0',
+                'saved_at': datetime.now().isoformat()
+            }
+            
+            if not AdvancedUtils.safe_json_operation(config_path, 'write', config_data):
+                return False
+            
+            # Save pre-tokenizer rules
+            rules_path = os.path.join(model_dir, 'pre_tokenizer_rules.json')
+            self.pre_tokenizer.save_rules(rules_path)
+            
+            logging.info(f"Model saved to {model_dir}")
+            return True
+            
+        except Exception as e:
+            logging.error(f"Error saving model: {str(e)}")
+            return False
+    
+    def load_model(self, model_dir: str) -> bool:
+        """Load model from directory"""
+        try:
+            # Load vocabulary
+            vocab_path = os.path.join(model_dir, 'vocab.json')
+            self.vocabulary = SmartVocabulary.load(vocab_path)
+            if not self.vocabulary:
+                return False
+            
+            # Load merges
+            merges_path = os.path.join(model_dir, 'merges.txt')
+            self.merges = {}
+            if os.path.exists(merges_path):
+                with open(merges_path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            parts = line.split()
+                            if len(parts) == 2:
+                                self.merges[(parts[0], parts[1])] = parts[0] + parts[1]
+            
+            self.inverse_merges = {v: k for k, v in self.merges.items()}
+            
+            # Load configuration
+            config_path = os.path.join(model_dir, 'tokenizer_config.json')
+            config_data = AdvancedUtils.safe_json_operation(config_path, 'read')
+            if config_data:
+                self.config = TokenizerConfig.from_dict(config_data.get('config', {}))
+                self.usage_statistics.update(config_data.get('usage_statistics', {}))
+                self.training_history = config_data.get('training_history', [])
+                self.trained = config_data.get('is_trained', False)
+            
+            # Load pre-tokenizer rules
+            rules_path = os.path.join(model_dir, 'pre_tokenizer_rules.json')
+            if os.path.exists(rules_path):
+                self.pre_tokenizer.load_rules(rules_path)
+            
+            logging.info(f"Model loaded from {model_dir}")
+            return True
+            
+        except Exception as e:
+            logging.error(f"Error loading model: {str(e)}")
+            return False
+    
+    @property
+    def vocab_size(self) -> int:
+        """Get vocabulary size"""
+        return len(self.vocabulary) if self.vocabulary else 0
+    
+    def get_model_info(self) -> Dict[str, Any]:
+        """Get comprehensive model information"""
+        info = {
+            'initialized': self.initialized,
+            'trained': self.trained,
+            'vocab_size': self.vocab_size,
+            'model_directory': self.config.model_dir,
+            'configuration': self.config.to_dict(),
+            'usage_statistics': self.usage_statistics,
+            'training_history': self.training_history[-10:],  # Last 10 trainings
+            'merges_count': len(self.merges)
+        }
+        
+        # Add component statistics
+        if self.pre_tokenizer:
+            info['pre_tokenizer_stats'] = self.pre_tokenizer.get_statistics()
+        
+        if self.post_processor:
+            info['post_processor_stats'] = self.post_processor.get_processing_statistics()
+        
+        if self.vocabulary:
+            info['vocabulary_stats'] = self.vocabulary.get_usage_statistics()
+        
+        # Performance metrics
+        encode_metrics = self.monitor.get_metrics('encode')
+        decode_metrics = self.monitor.get_metrics('decode')
+        
+        if encode_metrics:
+            info['encoding_performance'] = encode_metrics
+        if decode_metrics:
+            info['decoding_performance'] = decode_metrics
+        
+        return info
+    
+    def __call__(self, 
+                 text: Union[str, List[str]],
+                 **kwargs) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
+        """Make tokenizer callable"""
+        if isinstance(text, list):
+            return self.batch_encode(text, **kwargs)
+        else:
+            return self.encode(text, **kwargs)
+    
+    def __repr__(self) -> str:
+        return (f"ProfessionalTokenizer(trained={self.trained}, "
+                f"vocab_size={self.vocab_size}, "
+                f"encodings={self.usage_statistics['total_encodings']})")
+```
+
+Main Demo Application
+
+main.py
+
+```python
+#!/usr/bin/env python3
+"""
+Professional LLM Tokenizer Demo - Client Demonstration
+Pure Python Implementation with Advanced Features
+"""
+
+import os
+import sys
+import json
+import time
+import logging
+import argparse
+from typing import List, Dict, Any, Optional
+from datetime import datetime
+
+# Add src to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+
+from tokenizer import ProfessionalTokenizer, TokenizerConfig
+from utils import AdvancedUtils
+
+class ProfessionalTokenizerDemo:
+    """
+    Professional demonstration of the LLM Tokenizer
+    with advanced features and user-friendly interface
+    """
+    
+    def __init__(self, config_file: str = "config/settings.json"):
+        self.config_file = config_file
+        self.config = self._load_config()
+        self.tokenizer: Optional[ProfessionalTokenizer] = None
+        self.demo_data_file = "data/demo_inputs.json"
+        self.setup_logging()
+        self.initialize_demo()
+    
+    def _load_config(self) -> Dict[str, Any]:
+        """Load demonstration configuration"""
+        default_config = {
+            "model_dir": "models/trained_model",
+            "training_data": "data/training_data.txt",
+            "demo_data": "data/demo_inputs.txt",
+            "auto_train": True,
+            "auto_update": True,
+            "log_level": "INFO",
+            "interactive_mode": True,
+            "save_demo_data": True,
+            "max_demo_inputs": 1000,
+            "vocab_size": 50000,
+            "min_training_samples": 10,
+            "language": "english",
+            "strategies": ["whitespace", "punctuation", "numbers", "urls", "emails", "dates", "times"]
+        }
+        
+        if os.path.exists(self.config_file):
+            loaded_config = AdvancedUtils.safe_json_operation(self.config_file, 'read')
+            if loaded_config:
+                default_config.update(loaded_config)
+                logging.info(f"Loaded configuration from {self.config_file}")
+        
+        # Save config to ensure it exists
+        os.makedirs(os.path.dirname(self.config_file), exist_ok=True)
+        AdvancedUtils.safe_json_operation(self.config_file, 'write', default_config)
+        
+        return default_config
+    
+    def setup_logging(self) -> None:
+        """Setup professional logging"""
+        log_level = getattr(logging, self.config.get('log_level', 'INFO'))
+        
+        # Create logs directory
+        os.makedirs('logs', exist_ok=True)
+        
+        # Configure logging
+        logging.basicConfig(
+            level=log_level,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler('logs/tokenizer_demo.log', encoding='utf-8'),
+                logging.StreamHandler(sys.stdout)
+            ]
+        )
+        
+        logging.info("Professional Tokenizer Demo started")
+    
+    def initialize_demo(self) -> None:
+        """Initialize the demo with tokenizer setup"""
+        logging.info("Initializing Professional Tokenizer Demo...")
+        
+        # Create directory structure
+        self._create_directories()
+        
+        # Create sample data if needed
+        self._create_sample_data()
+        
+        # Initialize tokenizer
+        tokenizer_config = TokenizerConfig(
+            model_dir=self.config['model_dir'],
+            auto_train=self.config['auto_train'],
+            auto_update=self.config['auto_update'],
+            max_vocab_size=self.config['vocab_size'],
+            min_training_samples=self.config['min_training_samples'],
+            language=self.config['language'],
+            strategies=self.config['strategies']
+        )
+        
+        self.tokenizer = ProfessionalTokenizer(tokenizer_config)
+        
+        # Auto-train if needed
+        training_data = self.config.get('training_data')
+        if (self.config['auto_train'] and training_data and 
+            os.path.exists(training_data) and not self.tokenizer.trained):
+            self.auto_train_tokenizer(training_data)
+        
+        logging.info("Professional Tokenizer Demo initialized successfully")
+    
+    def _create_directories(self) -> None:
+        """Create necessary directories"""
+        directories = [
+            'models/trained_model',
+            'data',
+            'config',
+            'logs',
+            'examples',
+            'tests'
+        ]
+        
+        for directory in directories:
+            os.makedirs(directory, exist_ok=True)
+    
+    def _create_sample_data(self) -> None:
+        """Create sample training and demo data"""
+        # Sample training data
+        training_file = self.config.get('training_data', 'data/training_data.txt')
+        if not os.path.exists(training_file):
+            sample_training_data = [
+                "The quick brown fox jumps over the lazy dog.",
+                "Artificial intelligence is transforming modern technology and society.",
+                "Natural language processing enables computers to understand human language.",
+                "Machine learning models require large datasets for effective training.",
+                "Python programming is widely used in data science and AI development.",
+                "Deep learning architectures like transformers have revolutionized NLP.",
+                "Tokenization is the first step in any text processing pipeline.",
+                "Attention mechanisms allow models to focus on relevant information.",
+                "Pre-trained language models can be fine-tuned for specific tasks.",
+                "The future of AI holds incredible potential across all industries."
+            ]
+            
+            os.makedirs(os.path.dirname(training_file), exist_ok=True)
+            with open(training_file, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(sample_training_data))
+            
+            logging.info(f"Created sample training data at {training_file}")
+        
+        # Sample demo data
+        demo_file = self.config.get('demo_data', 'data/demo_inputs.txt')
+        if not os.path.exists(demo_file):
+            sample_demo_data = [
+                "Hello world! This is a demonstration of the professional tokenizer.",
+                "The tokenizer can handle complex text with punctuation, numbers 123, and special cases.",
+                "Email addresses like user@example.com and URLs like https://example.com are preserved.",
+                "Dates like 2023-12-25 and times like 14:30 are recognized as single tokens.",
+                "Multi-language text: 'Bonjour le monde' and 'Hola mundo' can be processed.",
+                "Technical terms like transformer, attention, and embeddings are handled properly.",
+                "The quick brown fox jumped over 42 lazy dogs on December 25th, 2023 at 3:45 PM.",
+                "Contact us at info@company.com or visit https://www.company.com for more information.",
+                "Machine learning models achieve 95.7% accuracy on benchmark datasets.",
+                "Natural language understanding enables applications like chatbots and translators."
+            ]
+            
+            with open(demo_file, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(sample_demo_data))
+            
+            logging.info(f"Created sample demo data at {demo_file}")
+    
+    def auto_train_tokenizer(self, training_file: str) -> None:
+        """Automatically train tokenizer if needed"""
+        if not self.tokenizer:
+            logging.error("Tokenizer not initialized")
+            return
+        
+        if self.tokenizer.trained:
+            logging.info("Tokenizer already trained")
+            return
+        
+        logging.info(f"Auto-training tokenizer with {training_file}")
+        
+        def progress_callback(progress: float, message: str):
+            print(f"Training progress: {progress:.1f}% - {message}")
+        
+        success = self.tokenizer.train(
+            training_file, 
+            save_model=True,
+            progress_callback=progress_callback
+        )
+        
+        if success:
+            logging.info("Auto-training completed successfully")
+            model_info = self.tokenizer.get_model_info()
+            print(f"✅ Training completed! Vocabulary size: {model_info['vocab_size']}")
+        else:
+            logging.warning("Auto-training failed")
+            print("❌ Training failed. Using basic tokenization.")
+    
+    def demonstrate_capabilities(self) -> None:
+        """Demonstrate tokenizer capabilities with various examples"""
+        if not self.tokenizer or not self.tokenizer.trained:
+            print("Tokenizer not available or not trained. Please train first.")
+            return
+        
+        print("\n" + "="*70)
+        print("PROFESSIONAL TOKENIZER CAPABILITIES DEMONSTRATION")
+        print("="*70)
+        
+        demonstration_examples = [
+            {
+                "name": "Basic Text",
+                "text": "Hello world! This is a basic demonstration.",
+                "description": "Simple text with punctuation"
+            },
+            {
+                "name": "Numbers and Dates",
+                "text": "The event will be on 2024-01-15 at 14:30 with 250 participants.",
+                "description": "Text with dates, times, and numbers"
+            },
+            {
+                "name": "URLs and Emails",
+                "text": "Contact us at info@company.com or visit https://www.company.com",
+                "description": "Text with email addresses and URLs"
+            },
+            {
+                "name": "Technical Text",
+                "text": "The transformer model achieved 95.7% accuracy on the benchmark.",
+                "description": "Technical text with percentages and specialized terms"
+            },
+            {
+                "name": "Multi-language",
+                "text": "Hello world! Bonjour le monde! ¡Hola mundo! 你好世界!",
+                "description": "Multi-language greeting"
+            }
+        ]
+        
+        for example in demonstration_examples:
+            print(f"\n🎯 {example['name']}: {example['description']}")
+            print("-" * 50)
+            
+            try:
+                result = self.tokenizer.encode(example['text'])
+                
+                print(f"📝 Input: {example['text']}")
+                print(f"🔢 Tokens ({len(result['input_ids'])}): {result['input_ids'][:20]}{'...' if len(result['input_ids']) > 20 else ''}")
+                
+                # Decode back
+                decoded = self.tokenizer.decode(result['input_ids'])
+                print(f"🔄 Decoded: {decoded}")
+                
+                # Show token mapping
+                print(f"📊 Token mapping (first 10):")
+                for i, token_id in enumerate(result['input_ids'][:10]):
+                    token = self.tokenizer.vocabulary.id_to_token(token_id)
+                    print(f"     {i:2d}: ID {token_id:4d} -> '{token}'")
+                
+            except Exception as e:
+                print(f"❌ Error processing example: {str(e)}")
+        
+        print("\n" + "="*70)
+        print("CAPABILITIES DEMONSTRATION COMPLETED")
+        print("="*70)
+    
+    def interactive_demo(self) -> None:
+        """Start interactive demonstration mode"""
+        if not self.tokenizer:
+            print("Tokenizer not initialized. Exiting.")
+            return
+        
+        print("\n🚀 PROFESSIONAL TOKENIZER INTERACTIVE DEMO")
+        print("="*55)
+        print("Welcome to the Professional LLM Tokenizer Demo!")
+        print("This demo showcases advanced tokenization capabilities.")
+        print("\nAvailable Commands:")
+        print("  'demo'     - Run capabilities demonstration")
+        print("  'info'     - Show tokenizer information")
+        print("  'train'    - Train tokenizer on demo data")
+        print("  'stats'    - Show comprehensive statistics")
+        print("  'batch'    - Process demo data file in batch")
+        print("  'config'   - Show current configuration")
+        print("  'quit'     - Exit the demo")
+        print("="*55)
+        
+        while True:
+            try:
+                user_input = input("\n💬 Enter text to tokenize or command: ").strip()
+                
+                if not user_input:
+                    continue
+                
+                # Handle commands
+                if user_input.lower() == 'quit':
+                    print("👋 Thank you for using the Professional Tokenizer Demo!")
+                    break
+                elif user_input.lower() == 'demo':
+                    self.demonstrate_capabilities()
+                    continue
+                elif user_input.lower() == 'info':
+                    self.show_tokenizer_info()
+                    continue
+                elif user_input.lower() == 'train':
+                    self.train_on_demo_data()
+                    continue
+                elif user_input.lower() == 'stats':
+                    self.show_comprehensive_stats()
+                    continue
+                elif user_input.lower() == 'batch':
+                    self.batch_process_demo()
+                    continue
+                elif user_input.lower() == 'config':
+                    self.show_configuration()
+                    continue
+                
+                # Process user input
+                self.process_user_input(user_input)
+                
+            except KeyboardInterrupt:
+                print("\n\n⚠️  Demo interrupted by user.")
+                break
+            except Exception as e:
+                print(f"\n❌ Error: {str(e)}")
+                logging.error(f"Interactive demo error: {str(e)}")
+    
+    def process_user_input(self, text: str) -> None:
+        """Process user input with comprehensive output"""
+        if not self.tokenizer:
+            print("Tokenizer not available")
+            return
+        
+        print("\n" + "🔄 Processing your input...")
+        
+        try:
+            start_time = time.time()
+            
+            # Encode the text
+            result = self.tokenizer.encode(
+                text,
+                add_special_tokens=True,
+                return_offsets=False
+            )
+            encoding_time = time.time() - start_time
+            
+            # Decode back
+            start_time = time.time()
+            decoded_text = self.tokenizer.decode(
+                result['input_ids'],
+                skip_special_tokens=True
+            )
+            decoding_time = time.time() - start_time
+            
+            # Display comprehensive results
+            print("\n" + "="*70)
+            print("TOKENIZATION RESULTS")
+            print("="*70)
+            
+            print(f"\n📝 ORIGINAL TEXT:")
+            print(f"   {text}")
+            
+            print(f"\n🔢 TOKEN IDS ({len(result['input_ids'])} tokens):")
+            # Show tokens in a formatted way
+            tokens_display = result['input_ids']
+            if len(tokens_display) > 20:
+                print(f"   {tokens_display[:10]} ... {tokens_display[-10:]}")
+            else:
+                print(f"   {tokens_display}")
+            
+            print(f"\n🔄 DECODED TEXT:")
+            print(f"   {decoded_text}")
+            
+            print(f"\n🎯 ATTENTION MASK:")
+            print(f"   {result['attention_mask'][:20]}{'...' if len(result['attention_mask']) > 20 else ''}")
+            
+            print(f"\n⏱️  PERFORMANCE:")
+            print(f"   Encoding: {encoding_time*1000:.2f} ms")
+            print(f"   Decoding: {decoding_time*1000:.2f} ms")
+            print(f"   Total: {(encoding_time + decoding_time)*1000:.2f} ms")
+            
+            print(f"\n📊 TOKEN DETAILS (first 15 tokens):")
+            for i, token_id in enumerate(result['input_ids'][:15]):
+                token = self.tokenizer.vocabulary.id_to_token(token_id)
+                token_info = self.tokenizer.vocabulary.get_token_info(token)
+                token_type = token_info.get('token_type', 'regular') if token_info else 'regular'
+                
+                print(f"   {i:2d}: {token_id:4d} -> '{token}' ({token_type})")
+            
+            print("="*70)
+            
+            # Save demo input
+            if self.config.get('save_demo_data', True):
+                self._save_demo_input(text, result, decoded_text)
+            
+        except Exception as e:
+            print(f"❌ Error processing input: {str(e)}")
+            logging.error(f"User input processing error: {str(e)}")
+    
+    def _save_demo_input(self, input_text: str, result: Dict[str, Any], decoded_text: str) -> None:
+        """Save demo input for analysis"""
+        try:
+            # Load existing demo data
+            demo_data = []
+            if os.path.exists(self.demo_data_file):
+                existing_data = AdvancedUtils.safe_json_operation(self.demo_data_file, 'read')
+                if existing_data and 'inputs' in existing_data:
+                    demo_data = existing_data['inputs']
+            
+            # Add new input
+            demo_data.append({
+                'input': input_text,
+                'result': result,
+                'decoded': decoded_text,
+                'timestamp': datetime.now().isoformat(),
+                'vocab_size': self.tokenizer.vocab_size if self.tokenizer else 0
+            })
+            
+            # Limit number of saved inputs
+            max_inputs = self.config.get('max_demo_inputs', 1000)
+            if len(demo_data) > max_inputs:
+                demo_data = demo_data[-max_inputs:]
+            
+            # Save updated data
+            save_data = {
+                'total_inputs': len(demo_data),
+                'last_updated': datetime.now().isoformat(),
+                'inputs': demo_data
+            }
+            
+            AdvancedUtils.safe_json_operation(self.demo_data_file, 'write', save_data)
+            
+        except Exception as e:
+            logging.error(f"Error saving demo input: {str(e)}")
+    
+    def show_tokenizer_info(self) -> None:
+        """Display comprehensive tokenizer information"""
+        if not self.tokenizer:
+            print("Tokenizer not available")
+            return
+        
+        info = self.tokenizer.get_model_info()
+        
+        print("\n📋 TOKENIZER INFORMATION")
+        print("="*40)
+        print(f"✅ Status: {'Trained' if info['trained'] else 'Not Trained'}")
+        print(f"📚 Vocabulary Size: {info['vocab_size']}")
+        print(f"🔄 Merge Operations: {info['merges_count']}")
+        print(f"📁 Model Directory: {info['model_directory']}")
+        print(f"🎯 Total Encodings: {info['usage_statistics']['total_encodings']}")
+        print(f"📈 Model Updates: {len(info['training_history'])}")
+        
+        if info['training_history']:
+            last_training = info['training_history'][-1]
+            print(f"🕒 Last Training: {last_training['timestamp']}")
+            print(f"📊 Last Training Samples: {last_training['samples']}")
+    
+    def train_on_demo_data(self) -> None:
+        """Train tokenizer on demo data"""
+        if not self.tokenizer:
+            print("Tokenizer not available")
+            return
+        
+        training_file = self.config.get('training_data')
+        if not training_file or not os.path.exists(training_file):
+            print("Training data not found")
+            return
+        
+        print(f"Training tokenizer on {training_file}...")
+        
+        def progress_callback(progress: float, message: str):
+            print(f"🔄 Training: {progress:.1f}% - {message}")
+        
+        success = self.tokenizer.train(
+            training_file,
+            save_model=True,
+            progress_callback=progress_callback
+        )
+        
+        if success:
+            print("✅ Training completed successfully!")
+            model_info = self.tokenizer.get_model_info()
+            print(f"📚 New vocabulary size: {model_info['vocab_size']}")
+        else:
+            print("❌ Training failed")
+    
+    def show_comprehensive_stats(self) -> None:
+        """Show comprehensive tokenizer statistics"""
+        if not self.tokenizer:
+            print("Tokenizer not available")
+            return
+        
+        info = self.tokenizer.get_model_info()
+        
+        print("\n📊 COMPREHENSIVE STATISTICS")
+        print("="*50)
+        
+        # Usage statistics
+        usage = info['usage_statistics']
+        print(f"Usage Statistics:")
+        print(f"  Total Encodings: {usage['total_encodings']}")
+        print(f"  Total Decodings: {usage['total_decodings']}")
+        print(f"  Total Tokens Generated: {usage['total_tokens_generated']}")
+        print(f"  Avg Encoding Time: {usage['average_encoding_time']*1000:.2f} ms")
+        print(f"  Avg Decoding Time: {usage['average_decoding_time']*1000:.2f} ms")
+        
+        # Language usage
+        if usage['language_usage']:
+            print(f"\nLanguage Usage:")
+            for lang, count in sorted(usage['language_usage'].items(), key=lambda x: x[1], reverse=True)[:5]:
+                print(f"  {lang}: {count}")
+        
+        # Performance metrics
+        if 'encoding_performance' in info:
+            perf = info['encoding_performance']
+            print(f"\nEncoding Performance:")
+            print(f"  Total Calls: {perf['total_calls']}")
+            print(f"  Average Duration: {perf['avg_duration']*1000:.2f} ms")
+            print(f"  P95 Duration: {perf['p95_duration']*1000:.2f} ms")
+        
+        # Training history
+        if info['training_history']:
+            print(f"\nTraining History (last 5):")
+            for training in info['training_history'][-5:]:
+                print(f"  {training['timestamp']}: {training['samples']} samples, vocab: {training['vocab_size']}")
+    
+    def batch_process_demo(self) -> None:
+        """Process demo data file in batch mode"""
+        if not self.tokenizer:
+            print("Tokenizer not available")
+            return
+        
+        demo_file = self.config.get('demo_data')
+        if not demo_file or not os.path.exists(demo_file):
+            print("Demo data file not found")
+            return
+        
+        print(f"Batch processing {demo_file}...")
+        
+        try:
+            with open(demo_file, 'r', encoding='utf-8') as f:
+                lines = [line.strip() for line in f if line.strip()]
+            
+            print(f"Processing {len(lines)} lines...")
+            
+            results = []
+            for i, line in enumerate(lines, 1):
+                print(f"Processing {i}/{len(lines)}...", end='\r')
+                
+                try:
+                    result = self.tokenizer.encode(line)
+                    results.append({
+                        'input': line,
+                        'token_count': len(result['input_ids']),
+                        'tokens': result['input_ids'][:10]  # First 10 tokens
+                    })
+                except Exception as e:
+                    results.append({'input': line, 'error': str(e)})
+            
+            print(f"\n✅ Processed {len(results)} lines successfully")
+            
+            # Show summary
+            successful = [r for r in results if 'error' not in r]
+            avg_tokens = sum(r['token_count'] for r in successful) / len(successful) if successful else 0
+            
+            print(f"\n📈 Batch Processing Summary:")
+            print(f"  Successful: {len(successful)}")
+            print(f"  Failed: {len(results) - len(successful)}")
+            print(f"  Average tokens per line: {avg_tokens:.1f}")
+            
+            # Save results
+            output_file = f"batch_results_{int(time.time())}.json"
+            AdvancedUtils.safe_json_operation(output_file, 'write', {
+                'processed_at': datetime.now().isoformat(),
+                'total_processed': len(results),
+                'successful': len(successful),
+                'results': results
+            })
+            
+            print(f"📁 Results saved to {output_file}")
+            
+        except Exception as e:
+            print(f"\n❌ Batch processing error: {str(e)}")
+    
+    def show_configuration(self) -> None:
+        """Show current configuration"""
+        print("\n⚙️  CURRENT CONFIGURATION")
+        print("="*30)
+        for key, value in self.config.items():
+            if isinstance(value, list):
+                print(f"  {key}: {', '.join(value)}")
+            else:
+                print(f"  {key}: {value}")
+
+def main():
+    """Main entry point for the professional demo"""
+    parser = argparse.ArgumentParser(description='Professional LLM Tokenizer Demo')
+    parser.add_argument('--demo', action='store_true', help='Run capabilities demonstration')
+    parser.add_argument('--train', action='store_true', help='Train tokenizer')
+    parser.add_argument('--batch', action='store_true', help='Batch process demo data')
+    parser.add_argument('--text', type=str, help='Text to tokenize')
+    parser.add_argument('--interactive', action='store_true', help='Start interactive demo')
+    parser.add_argument('--config', type=str, default='config/settings.json', help='Config file path')
+    
+    args = parser.parse_args()
+    
+    # Initialize demo
+    demo = ProfessionalTokenizerDemo(config_file=args.config)
+    
+    # Execute based on arguments
+    if args.demo:
+        demo.demonstrate_capabilities()
+    elif args.train:
+        demo.train_on_demo_data()
+    elif args.batch:
+        demo.batch_process_demo()
+    elif args.text:
+        demo.process_user_input(args.text)
+    elif args.interactive or not any(vars(args).values()):
+        # Default to interactive demo
+        demo.interactive_demo()
+
+if __name__ == "__main__":
+    # Ensure proper directory structure
+    os.makedirs('models/trained_model', exist_ok=True)
+    os.makedirs('data', exist_ok=True)
+    os.makedirs('config', exist_ok=True)
+    os.makedirs('logs', exist_ok=True)
+    
+    # Run the demo
+    main()
+```
+
+Additional Files
+
+run_demo.py
+
+```python
+#!/usr/bin/env python3
+"""
+Quick Start Demo Runner for Professional LLM Tokenizer
+"""
+
+import os
+import sys
+
+# Add the current directory to Python path
+sys.path.insert(0, os.path.dirname(__file__))
+
+def main():
+    """Quick start the demo"""
+    print("🚀 Starting Professional LLM Tokenizer Demo...")
+    
+    try:
+        from main import ProfessionalTokenizerDemo
+        
+        # Initialize and run the demo
+        demo = ProfessionalTokenizerDemo()
+        demo.interactive_demo()
+        
+    except ImportError as e:
+        print(f"❌ Error: Could not import required modules. {e}")
+        print("💡 Make sure you have all the source files in the correct directory structure.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"❌ Error starting demo: {e}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
+```
+
+requirements.txt
+
+```text
+# Professional LLM Tokenizer - Pure Python Implementation
+# No external dependencies required - Uses only Python Standard Library
+
+# Required Python version: 3.7+
+# Features: Advanced tokenization, automatic training, multi-language support
+# License: MIT
+
+# This is a pure Python implementation with zero external dependencies
+# All advanced features are implemented using only the Python Standard Library
+```
+
+setup.py
+
+```python
+"""
+Setup script for Professional LLM Tokenizer Demo
+Pure Python Implementation - No External Dependencies
+"""
+
+from setuptools import setup, find_packages
+
+with open("README.md", "r", encoding="utf-8") as fh:
+    long_description = fh.read()
+
+setup(
+    name="professional-llm-tokenizer",
+    version="3.0.0",
+    author="AI Tokenizer Team",
+    author_email="demo@tokenizer.ai",
+    description="Professional LLM Tokenizer Demo - Pure Python Implementation",
+    long_description=long_description,
+    long_description_content_type="text/markdown",
+    packages=find_packages(),
+    classifiers=[
+        "Development Status :: 5 - Production/Stable",
+        "Intended Audience :: Developers",
+        "Intended Audience :: Science/Research",
+        "License :: OSI Approved :: MIT License",
+        "Operating System :: OS Independent",
+        "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.7",
+        "Programming Language :: Python :: 3.8",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "Topic :: Scientific/Engineering :: Artificial Intelligence",
+        "Topic :: Text Processing :: Linguistic",
+        "Topic :: Software Development :: Libraries :: Python Modules",
+    ],
+    python_requires=">=3.7",
+    keywords="tokenizer, nlp, llm, ai, machine learning, natural language processing",
+    project_urls={
+        "Source": "https://github.com/example/professional-llm-tokenizer",
+        "Bug Reports": "https://github.com/example/professional-llm-tokenizer/issues",
+    },
+)
+```
+
+Usage Instructions
+
+Quick Start:
+
+```bash
+# Run the demo directly
+python run_demo.py
+
+# Or use the main application
+python main.py --interactive
+```
+
+Command Line Options:
+
+```bash
+# Interactive demo (recommended)
+python main.py --interactive
+
+# Run capabilities demonstration
+python main.py --demo
+
+# Train tokenizer
+python main.py --train
+
+# Process specific text
+python main.py --text "Your text here"
+
+# Batch process demo file
+python main.py --batch
+```
+
+Key Features Demonstrated:
+
+1. Automatic Training: Trains on first use with sample data
+2. Professional Output: Comprehensive tokenization results
+3. Multi-language Support: Handles English, Spanish, French, etc.
+4. Advanced Tokenization: URLs, emails, dates, numbers as single tokens
+5. Interactive Demo: User-friendly interface with commands
+6. Batch Processing: Process files in batch mode
+7. Performance Analytics: Comprehensive statistics and metrics
+8. Pure Python: No external dependencies required
+9. Persistent Models: Automatic save/load of trained models
+10. Error Handling: Robust error handling throughout
+
+This professional demo showcases a complete, advanced tokenizer implementation with all the features you requested, using only pure Python with no external dependencies.
