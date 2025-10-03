@@ -1,0 +1,617 @@
+I'll create a comprehensive main.py file with training, inference, and full protection with local save functionality. Here's the complete implementation:
+
+Project Structure Update
+
+```
+llm_tokenizer/
+├── src/ (all previous files)
+├── models/
+│   └── trained_model/
+│       ├── vocab.json
+│       ├── merges.txt
+│       └── tokenizer_config.json
+├── data/
+│   └── training_data.txt
+├── main.py
+└── requirements.txt
+```
+
+Main Implementation File
+
+main.py
+
+```python
+#!/usr/bin/env python3
+"""
+Advanced LLM Tokenizer - Complete Training and Inference System
+Pure Python Implementation with Local Save/Load
+"""
+
+import os
+import sys
+import json
+import time
+import logging
+from typing import List, Dict, Any, Optional, Union
+import re
+
+# Add src to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+
+from tokenizer import Tokenizer
+from vocabulary import Vocabulary
+from pre_tokenizer import PreTokenizer
+from post_processor import PostProcessor
+from trainers import BPETrainer
+from utils import save_json, load_json
+
+class AdvancedLLMTokenizer:
+    """Advanced LLM Tokenizer with training, inference, and protection"""
+    
+    def __init__(self, model_dir: str = "models/trained_model"):
+        self.model_dir = model_dir
+        self.tokenizer: Optional[Tokenizer] = None
+        self.is_trained = False
+        self.setup_logging()
+        
+    def setup_logging(self):
+        """Setup comprehensive logging"""
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler('tokenizer.log', encoding='utf-8'),
+                logging.StreamHandler(sys.stdout)
+            ]
+        )
+        self.logger = logging.getLogger(__name__)
+    
+    def load_or_train_tokenizer(self, training_file: Optional[str] = None, force_retrain: bool = False):
+        """Load existing tokenizer or train new one"""
+        try:
+            if not force_retrain and self._check_existing_model():
+                self._load_existing_model()
+                return True
+            
+            if training_file and os.path.exists(training_file):
+                self._train_new_model(training_file)
+                return True
+            else:
+                self.logger.error(f"Training file not found: {training_file}")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Error in load_or_train_tokenizer: {str(e)}")
+            return False
+    
+    def _check_existing_model(self) -> bool:
+        """Check if model files exist"""
+        required_files = ['vocab.json', 'merges.txt', 'tokenizer_config.json']
+        for file in required_files:
+            if not os.path.exists(os.path.join(self.model_dir, file)):
+                return False
+        return True
+    
+    def _load_existing_model(self):
+        """Load existing trained model"""
+        try:
+            self.logger.info("Loading existing tokenizer model...")
+            self.tokenizer = Tokenizer.from_pretrained(self.model_dir)
+            self.is_trained = True
+            self.logger.info(f"Tokenizer loaded successfully. Vocab size: {self.tokenizer.vocab_size()}")
+        except Exception as e:
+            self.logger.error(f"Error loading model: {str(e)}")
+            raise
+    
+    def _train_new_model(self, training_file: str):
+        """Train new tokenizer model"""
+        try:
+            self.logger.info("Starting tokenizer training...")
+            
+            # Load training data with protection
+            training_texts = self._load_training_data(training_file)
+            if not training_texts:
+                raise ValueError("No training data loaded")
+            
+            self.logger.info(f"Loaded {len(training_texts)} training samples")
+            
+            # Initialize tokenizer with advanced configuration
+            self.tokenizer = Tokenizer(
+                pre_tokenizer=PreTokenizer(
+                    lowercase=True,
+                    strip_accents=False,
+                    split_on_punctuation=True
+                ),
+                post_processor=PostProcessor(
+                    add_bos=True,
+                    add_eos=True,
+                    max_length=512,
+                    padding=True
+                )
+            )
+            
+            # Train tokenizer
+            start_time = time.time()
+            self.tokenizer.train(
+                texts=training_texts,
+                vocab_size=5000,  # Reduced for example, can be increased
+                min_frequency=2,
+                special_tokens=['[UNK]', '[PAD]', '[BOS]', '[EOS]', '[CLS]', '[SEP]', '[MASK]']
+            )
+            training_time = time.time() - start_time
+            
+            # Save model
+            os.makedirs(self.model_dir, exist_ok=True)
+            self.tokenizer.save(self.model_dir)
+            
+            self.is_trained = True
+            self.logger.info(f"Training completed in {training_time:.2f} seconds")
+            self.logger.info(f"Final vocabulary size: {self.tokenizer.vocab_size()}")
+            self.logger.info(f"Model saved to: {self.model_dir}")
+            
+        except Exception as e:
+            self.logger.error(f"Error during training: {str(e)}")
+            raise
+    
+    def _load_training_data(self, file_path: str) -> List[str]:
+        """Load and validate training data with protection"""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            
+            # Clean and validate data
+            cleaned_lines = []
+            for line in lines:
+                line = line.strip()
+                if line and self._validate_text(line):
+                    cleaned_lines.append(line)
+            
+            # Add protection against small datasets
+            if len(cleaned_lines) < 10:
+                self.logger.warning("Training dataset is very small. Adding sample data.")
+                cleaned_lines.extend(self._get_sample_data())
+            
+            return cleaned_lines
+            
+        except Exception as e:
+            self.logger.error(f"Error loading training data: {str(e)}")
+            return self._get_sample_data()
+    
+    def _validate_text(self, text: str) -> bool:
+        """Validate text for training"""
+        # Check for minimum length
+        if len(text) < 2:
+            return False
+        
+        # Check for excessive repetition
+        if self._has_excessive_repetition(text):
+            return False
+        
+        # Check for valid Unicode
+        try:
+            text.encode('utf-8')
+            return True
+        except UnicodeEncodeError:
+            return False
+    
+    def _has_excessive_repetition(self, text: str, max_repeat: int = 5) -> bool:
+        """Check for excessive character repetition"""
+        if not text:
+            return False
+        
+        count = 1
+        for i in range(1, len(text)):
+            if text[i] == text[i-1]:
+                count += 1
+                if count > max_repeat:
+                    return True
+            else:
+                count = 1
+        return False
+    
+    def _get_sample_data(self) -> List[str]:
+        """Get sample training data as fallback"""
+        return [
+            "The quick brown fox jumps over the lazy dog.",
+            "Machine learning is transforming the world.",
+            "Natural language processing enables amazing applications.",
+            "Python is a powerful programming language for AI.",
+            "Deep learning models require large amounts of data.",
+            "Tokenization is the first step in NLP pipelines.",
+            "Transformers have revolutionized machine learning.",
+            "Attention mechanisms allow models to focus on important parts.",
+            "Pre-trained language models can be fine-tuned for specific tasks.",
+            "The future of AI is exciting and full of possibilities."
+        ]
+    
+    def encode_text(self, text: str, **kwargs) -> Dict[str, Any]:
+        """Encode text with comprehensive protection"""
+        if not self.is_trained or not self.tokenizer:
+            raise ValueError("Tokenizer not trained or loaded")
+        
+        if not text or not isinstance(text, str):
+            raise ValueError("Invalid input text")
+        
+        # Validate input length
+        if len(text) > 10000:  # Limit input size
+            raise ValueError("Input text too long (max 10000 characters)")
+        
+        try:
+            # Pre-process text
+            processed_text = self._preprocess_input(text)
+            
+            # Encode with tokenizer
+            result = self.tokenizer.encode(processed_text, **kwargs)
+            
+            # Add metadata
+            result['metadata'] = {
+                'input_length': len(text),
+                'token_count': len(result['input_ids']),
+                'timestamp': time.time(),
+                'model_version': '1.0.0'
+            }
+            
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"Encoding error: {str(e)}")
+            raise
+    
+    def decode_tokens(self, token_ids: List[int], **kwargs) -> str:
+        """Decode token IDs with protection"""
+        if not self.is_trained or not self.tokenizer:
+            raise ValueError("Tokenizer not trained or loaded")
+        
+        if not token_ids or not isinstance(token_ids, list):
+            raise ValueError("Invalid token IDs")
+        
+        # Validate token IDs
+        valid_token_ids = [tid for tid in token_ids if isinstance(tid, int) and 0 <= tid < self.tokenizer.vocab_size()]
+        
+        if len(valid_token_ids) != len(token_ids):
+            self.logger.warning("Some token IDs were invalid and filtered out")
+        
+        try:
+            return self.tokenizer.decode(valid_token_ids, **kwargs)
+        except Exception as e:
+            self.logger.error(f"Decoding error: {str(e)}")
+            raise
+    
+    def _preprocess_input(self, text: str) -> str:
+        """Pre-process input text with protection"""
+        # Remove excessive whitespace
+        text = re.sub(r'\s+', ' ', text.strip())
+        
+        # Truncate if too long (keep semantics)
+        if len(text) > 10000:
+            text = text[:10000] + "... [TRUNCATED]"
+        
+        return text
+    
+    def get_tokenizer_info(self) -> Dict[str, Any]:
+        """Get comprehensive tokenizer information"""
+        if not self.is_trained or not self.tokenizer:
+            return {"status": "not_trained"}
+        
+        return {
+            "status": "trained",
+            "vocab_size": self.tokenizer.vocab_size(),
+            "model_directory": self.model_dir,
+            "special_tokens": list(self.tokenizer.vocabulary.special_tokens.keys()),
+            "config": self.tokenizer.config
+        }
+    
+    def batch_encode(self, texts: List[str], **kwargs) -> List[Dict[str, Any]]:
+        """Batch encode multiple texts"""
+        results = []
+        for text in texts:
+            try:
+                result = self.encode_text(text, **kwargs)
+                results.append(result)
+            except Exception as e:
+                self.logger.error(f"Batch encoding error for text: {e}")
+                results.append({"error": str(e)})
+        return results
+    
+    def interactive_mode(self):
+        """Start interactive mode for user input"""
+        if not self.is_trained:
+            self.logger.error("Tokenizer not trained. Please train first.")
+            return
+        
+        self.logger.info("Interactive mode started. Type 'quit' to exit.")
+        self.logger.info("Commands: 'info', 'stats', 'reset', 'quit'")
+        
+        while True:
+            try:
+                user_input = input("\nEnter text to tokenize (or command): ").strip()
+                
+                if not user_input:
+                    continue
+                
+                # Handle commands
+                if user_input.lower() == 'quit':
+                    self.logger.info("Exiting interactive mode.")
+                    break
+                elif user_input.lower() == 'info':
+                    info = self.get_tokenizer_info()
+                    print(json.dumps(info, indent=2))
+                    continue
+                elif user_input.lower() == 'stats':
+                    self._show_statistics()
+                    continue
+                elif user_input.lower() == 'reset':
+                    self._reset_session()
+                    continue
+                
+                # Process text input
+                self._process_user_input(user_input)
+                
+            except KeyboardInterrupt:
+                self.logger.info("\nInterrupted by user. Exiting.")
+                break
+            except Exception as e:
+                self.logger.error(f"Error in interactive mode: {str(e)}")
+    
+    def _process_user_input(self, text: str):
+        """Process user input with full encoding/decoding"""
+        try:
+            # Encode the text
+            start_time = time.time()
+            encoded_result = self.encode_text(text, add_special_tokens=True)
+            encode_time = time.time() - start_time
+            
+            # Decode back
+            start_time = time.time()
+            decoded_text = self.decode_tokens(encoded_result['input_ids'], skip_special_tokens=True)
+            decode_time = time.time() - start_time
+            
+            # Display results
+            print("\n" + "="*50)
+            print(f"INPUT TEXT: {text}")
+            print("="*50)
+            
+            print(f"\nTOKEN IDs ({len(encoded_result['input_ids'])} tokens):")
+            print(encoded_result['input_ids'])
+            
+            print(f"\nATTENTION MASK:")
+            print(encoded_result['attention_mask'])
+            
+            print(f"\nDECODED TEXT:")
+            print(decoded_text)
+            
+            print(f"\nMETADATA:")
+            print(f"  Encoding time: {encode_time:.4f}s")
+            print(f"  Decoding time: {decode_time:.4f}s")
+            print(f"  Token count: {len(encoded_result['input_ids'])}")
+            print(f"  Input length: {len(text)} characters")
+            
+            # Show token mapping
+            self._show_token_mapping(encoded_result['input_ids'])
+            
+        except Exception as e:
+            self.logger.error(f"Error processing input: {str(e)}")
+    
+    def _show_token_mapping(self, token_ids: List[int]):
+        """Show token-to-text mapping"""
+        if not self.tokenizer:
+            return
+        
+        print(f"\nTOKEN MAPPING:")
+        for i, token_id in enumerate(token_ids):
+            token = self.tokenizer.vocabulary.id_to_token(token_id)
+            print(f"  {i:3d}: ID {token_id:4d} -> '{token}'")
+    
+    def _show_statistics(self):
+        """Show tokenizer statistics"""
+        if not self.tokenizer:
+            print("Tokenizer not available")
+            return
+        
+        vocab = self.tokenizer.get_vocab()
+        special_tokens = len(self.tokenizer.vocabulary.special_tokens)
+        regular_tokens = len(vocab) - special_tokens
+        
+        print(f"\nTOKENIZER STATISTICS:")
+        print(f"  Total vocabulary size: {len(vocab)}")
+        print(f"  Regular tokens: {regular_tokens}")
+        print(f"  Special tokens: {special_tokens}")
+        print(f"  Merge operations: {len(self.tokenizer.merges)}")
+    
+    def _reset_session(self):
+        """Reset current session"""
+        self.logger.info("Session reset. Model remains trained.")
+    
+    def export_model(self, export_dir: str):
+        """Export model with additional metadata"""
+        if not self.is_trained or not self.tokenizer:
+            raise ValueError("No trained model to export")
+        
+        try:
+            os.makedirs(export_dir, exist_ok=True)
+            
+            # Save original model files
+            self.tokenizer.save(export_dir)
+            
+            # Add export metadata
+            export_meta = {
+                "export_timestamp": time.time(),
+                "export_format": "llm_tokenizer_v1",
+                "vocab_size": self.tokenizer.vocab_size(),
+                "training_data_info": "custom_training",
+                "version": "1.0.0"
+            }
+            
+            with open(os.path.join(export_dir, "export_metadata.json"), 'w') as f:
+                json.dump(export_meta, f, indent=2)
+            
+            self.logger.info(f"Model exported to: {export_dir}")
+            
+        except Exception as e:
+            self.logger.error(f"Export error: {str(e)}")
+            raise
+
+def main():
+    """Main function with command line interface"""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Advanced LLM Tokenizer')
+    parser.add_argument('--train', action='store_true', help='Train tokenizer')
+    parser.add_argument('--train-file', type=str, help='Training data file')
+    parser.add_argument('--model-dir', type=str, default='models/trained_model', help='Model directory')
+    parser.add_argument('--interactive', action='store_true', help='Start interactive mode')
+    parser.add_argument('--encode', type=str, help='Text to encode')
+    parser.add_argument('--decode', type=str, help='Token IDs to decode (comma-separated)')
+    parser.add_argument('--force-retrain', action='store_true', help='Force retraining')
+    
+    args = parser.parse_args()
+    
+    # Initialize tokenizer system
+    tokenizer_system = AdvancedLLMTokenizer(model_dir=args.model_dir)
+    
+    # Training phase
+    if args.train or args.force_retrain or not tokenizer_system._check_existing_model():
+        training_file = args.train_file or "data/training_data.txt"
+        
+        # Create sample training data if file doesn't exist
+        if not os.path.exists(training_file):
+            os.makedirs(os.path.dirname(training_file), exist_ok=True)
+            with open(training_file, 'w', encoding='utf-8') as f:
+                sample_data = tokenizer_system._get_sample_data()
+                f.write('\n'.join(sample_data))
+            print(f"Created sample training data at: {training_file}")
+        
+        print("Starting training phase...")
+        success = tokenizer_system.load_or_train_tokenizer(training_file, force_retrain=args.force_retrain)
+        if not success:
+            print("Training failed. Exiting.")
+            return
+    else:
+        # Load existing model
+        success = tokenizer_system.load_or_train_tokenizer()
+        if not success:
+            print("Model loading failed. Exiting.")
+            return
+    
+    # Inference phase
+    if args.encode:
+        # Encode single text
+        try:
+            result = tokenizer_system.encode_text(args.encode, add_special_tokens=True)
+            print(f"Input: {args.encode}")
+            print(f"Token IDs: {result['input_ids']}")
+            print(f"Decoded: {tokenizer_system.decode_tokens(result['input_ids'], skip_special_tokens=True)}")
+        except Exception as e:
+            print(f"Encoding error: {e}")
+    
+    elif args.decode:
+        # Decode token IDs
+        try:
+            token_ids = [int(x.strip()) for x in args.decode.split(',')]
+            decoded = tokenizer_system.decode_tokens(token_ids, skip_special_tokens=True)
+            print(f"Token IDs: {token_ids}")
+            print(f"Decoded text: {decoded}")
+        except Exception as e:
+            print(f"Decoding error: {e}")
+    
+    elif args.interactive:
+        # Start interactive mode
+        tokenizer_system.interactive_mode()
+    
+    else:
+        # Default: show info and start interactive mode
+        info = tokenizer_system.get_tokenizer_info()
+        print("Tokenizer Information:")
+        print(json.dumps(info, indent=2))
+        print("\nStarting interactive mode...")
+        tokenizer_system.interactive_mode()
+
+if __name__ == "__main__":
+    main()
+```
+
+Training Data File
+
+data/training_data.txt
+
+```text
+The quick brown fox jumps over the lazy dog.
+Machine learning and artificial intelligence are transforming industries.
+Natural language processing enables computers to understand human language.
+Python is a versatile programming language used in data science and AI.
+Deep learning models require large datasets for effective training.
+Tokenization is the process of converting text into tokens.
+Transformers have revolutionized the field of natural language processing.
+Attention mechanisms allow models to focus on relevant information.
+Pre-trained language models can be fine-tuned for specific applications.
+The future of artificial intelligence holds incredible potential.
+Quantum computing may solve problems that are currently intractable.
+Neural networks are inspired by the human brain's structure.
+Computer vision enables machines to interpret visual information.
+Reinforcement learning involves learning through trial and error.
+Data preprocessing is crucial for machine learning projects.
+Feature engineering can significantly improve model performance.
+Cloud computing provides scalable resources for AI development.
+Ethical considerations are important in AI system design.
+Explainable AI helps users understand model decisions.
+Edge computing allows AI models to run on local devices.
+```
+
+Requirements File
+
+requirements.txt
+
+```text
+# Pure Python - no external dependencies required
+# This tokenizer uses only standard library modules
+```
+
+Usage Examples
+
+Command Line Usage:
+
+1. Train and start interactive mode:
+
+```bash
+python main.py --train --interactive
+```
+
+1. Encode specific text:
+
+```bash
+python main.py --encode "Hello world! This is a test."
+```
+
+1. Decode token IDs:
+
+```bash
+python main.py --decode "123,456,789,42,101"
+```
+
+1. Force retrain:
+
+```bash
+python main.py --train --train-file data/training_data.txt --force-retrain --interactive
+```
+
+Interactive Mode Commands:
+
+· info - Show tokenizer information
+· stats - Show statistics
+· reset - Reset session
+· quit - Exit interactive mode
+
+Key Features:
+
+1. Complete Training Pipeline: Automatic training with fallback data
+2. Advanced Protection: Input validation, error handling, logging
+3. Local Save/Load: Model persistence with metadata
+4. Interactive Mode: Real-time encoding/decoding with visualization
+5. Batch Processing: Support for multiple texts
+6. Comprehensive Logging: File and console logging
+7. Error Recovery: Fallback mechanisms and sample data
+8. Performance Metrics: Timing and token counting
+9. Model Export: Additional metadata for exported models
+10. Command Line Interface: Flexible argument parsing
+
+This implementation provides a professional-grade tokenizer system with all the advanced features you requested, using only pure Python and local file operations.
