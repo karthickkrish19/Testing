@@ -1,0 +1,164 @@
+import re
+from collections import Counter
+import pickle
+
+class AdvancedTokenizer:
+    def __init__(self):
+        self.vocab = {}
+        self.inverse_vocab = {}
+        self.vocab_size = 0
+        self.special_tokens = {
+            '<UNK>': 0,
+            '<PAD>': 1,
+            '<BOS>': 2,
+            '<EOS>': 3,
+            '<SEP>': 4,
+            '<CLS>': 5
+        }
+        self.merge_rules = {}
+
+    def build_vocab(self, texts, max_vocab_size=50000, min_freq=2):
+        word_counts = Counter()
+        char_counts = Counter()
+        for text in texts:
+            words = self._preprocess_text(text)
+            word_counts.update(words)
+            for word in words:
+                char_counts.update(word)
+        base_vocab = set()
+        for char, count in char_counts.items():
+            if count >= min_freq:
+                base_vocab.add(char)
+        most_common_words = [word for word, count in word_counts.most_common(max_vocab_size // 2)
+                            if count >= min_freq and len(word) > 1]
+        self.vocab = self.special_tokens.copy()
+        for char in sorted(base_vocab):
+            if char not in self.vocab:
+                self.vocab[char] = len(self.vocab)
+        for word in most_common_words:
+            if word not in self.vocab and len(self.vocab) < max_vocab_size:
+                self.vocab[word] = len(self.vocab)
+        self.inverse_vocab = {v: k for k, v in self.vocab.items()}
+        self.vocab_size = len(self.vocab)
+        self._learn_merge_rules(word_counts)
+
+    def _learn_merge_rules(self, word_counts):
+        pairs = Counter()
+        for word, count in word_counts.items():
+            symbols = list(word)
+            for i in range(len(symbols)-1):
+                pairs[(symbols[i], symbols[i + 1])] += count
+        most_common_pairs = pairs.most_common(1000)
+        for (first, second), count in most_common_pairs:
+            if count > 10:
+                merged = first + second
+                if merged not in self.merge_rules:
+                    self.merge_rules[(first, second)] = merged
+
+    def _preprocess_text(self, text):
+        if not isinstance(text, str):
+            return []
+        text = text.lower()
+        contractions = {
+            "n't": " not",
+            "'re": " are",
+            "'s": " is",
+            "'d": " would",
+            "'ll": " will",
+            "'ve": " have",
+            "'m": " am"
+        }
+        for cont, expanded in contractions.items():
+            text = text.replace(cont, expanded)
+        text = re.sub(r'[^\w\s\.\?\!,]', ' ', text)
+        text = re.sub(r'\s+', ' ', text)
+        return text.strip().split()
+
+    def encode(self, text, add_special_tokens=True):
+        if not text:
+            return []
+        words = self._preprocess_text(text)
+        tokens = []
+        if add_special_tokens:
+            tokens.append(self.vocab['<BOS>'])
+        for word in words:
+            if word in self.vocab:
+                tokens.append(self.vocab[word])
+            else:
+                current = list(word)
+                merged = True
+                while merged and len(current) > 1:
+                    merged = False
+                    for i in range(len(current) - 1):
+                        pair = (current[i], current[i + 1])
+                        if pair in self.merge_rules:
+                            merged_char = self.merge_rules[pair]
+                            current = current[:i] + [merged_char] + current[i + 2:]
+                            merged = True
+                            break
+                for char in current:
+                    if char in self.vocab:
+                        tokens.append(self.vocab[char])
+                    else:
+                        tokens.append(self.vocab['<UNK>'])
+        if add_special_tokens:
+            tokens.append(self.vocab['<EOS>'])
+        return tokens
+
+    def decode(self, tokens):
+        words = []
+        for token in tokens:
+            if token in self.inverse_vocab:
+                word = self.inverse_vocab[token]
+                if word not in self.special_tokens:
+                    words.append(word)
+        return ' '.join(words)
+
+    def save(self, path):
+        """Save tokenizer instance to local file"""
+        try:
+            with open(path, "wb") as f:
+                pickle.dump({
+                    'vocab': self.vocab,
+                    'inverse_vocab': self.inverse_vocab,
+                    'vocab_size': self.vocab_size,
+                    'special_tokens': self.special_tokens,
+                    'merge_rules': self.merge_rules
+                }, f)
+            print(f"Tokenizer saved to {path}")
+        except Exception as e:
+            print(f"Error saving tokenizer: {e}")
+
+    def load(self, path):
+        """Load tokenizer instance from local file"""
+        try:
+            with open(path, "rb") as f:
+                data = pickle.load(f)
+                self.vocab = data['vocab']
+                self.inverse_vocab = data['inverse_vocab']
+                self.vocab_size = data['vocab_size']
+                self.special_tokens = data['special_tokens']
+                self.merge_rules = data['merge_rules']
+            print(f"Tokenizer loaded from {path}")
+        except Exception as e:
+            print(f"Error loading tokenizer: {e}")
+
+tokenizer = AdvancedTokenizer()
+texts = [
+    "Artificial intelligence is transforming society.",
+    "Python is a popular programming language.",
+    "Don't forget machine learning!"
+]
+tokenizer.build_vocab(texts)
+
+# Save tokenizer to file
+tokenizer.save("my_tokenizer.pkl")
+
+# To load later:
+new_tokenizer = AdvancedTokenizer()
+new_tokenizer.load("my_tokenizer.pkl")
+
+# Use loaded tokenizer
+encoded = new_tokenizer.encode("Python isn't hard to learn.")
+print(encoded)
+print(new_tokenizer.decode(encoded))
