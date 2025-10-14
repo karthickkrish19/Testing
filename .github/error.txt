@@ -1,80 +1,94 @@
-module "optum_ips" {
-  source = "git::https://github.com/dojo360/optum-ips"
-}
+import re  
+import asyncio
 
-module "storage_accounts" {
-  for_each  = toset(local.staccounts)
-  source                     = "git::https://github.com/dojo360/azure-storage-account//profiles/custom?ref=v19.1.4"
-  name                       = "st${each.key}"
-  namespace                  = var.environment
-  resource_group_name        = var.resource_group_name
-  location                   = var.location
-  tags                       = var.common_tags
-  containers                 = []
-  virtual_network_subnet_ids = []
-  private_endpoints          = local.private_endpoint
-  account_replication_type   = "RAGRS"
-  allow_blob_public_access   = false
-  observability              = {
-      enabled                = true
-      diagnostic_settings    = {
-        log_analytics_workspace_id  = var.log_analytics_workspace_id
-      }
-  }
-  naming_rules = {
-    include_location_in_name = var.include_location_in_name
-    use_abbreviated_location = false
-    separator                = ""
-  }
-}
+class cleanTokeniser:
 
-/* This would be used once Dojo team provides support for RBAC Authentication
-resource "azurerm_role_assignment" "app_api_blob_owner" {
-  for_each  = toset(local.staccounts)
-  scope                       = module.storage_accounts[each.key].id
-  role_definition_name        = "Storage Blob Data Contributor"
-  principal_id                = var.api_app_identity
-}
+    def cleanListText(self, texts):
+        removeDupWord = self.remove_duplicates(texts)
+        cleandata = self.cleanlistdata(removeDupWord)
+        return cleandata
 
-resource "azurerm_role_assignment" "app_webjobs_blob_owner" {
-  for_each  = toset(local.staccounts)
-  scope                       = module.storage_accounts[each.key].id
-  role_definition_name        = "Storage Blob Data Owner"
-  principal_id                = var.web_jobs_app_identity
-}
-*/
+    async def remove_duplicates(self, text_list):
+        seen = set()
+        result = []
+        for word in text_list:
+            if word not in seen:
+                seen.add(word)
+                result.append(word)
+        return await result 
 
-module "st_pl_endpoint" {
-  for_each  = toset(local.staccounts)
-  source                      = "git::https://github.com/dojo360/azure-private-link//profiles/private-endpoint?ref=v19.1.2"
-  name                        = module.storage_accounts[each.key].name
-  namespace                   = var.environment
-  location                    = var.location
-  resource_group_name         = var.resource_group_name
-  subnet_id                   = var.snet_pl_id
-  private_dns_zone_group      = {
-    name                            = var.blob_dns_zone_name
-    private_dns_zone_ids            = [var.blob_dns_zone_id]
-  }
-  private_service_connection  = {
-    private_connection_resource_id  = module.storage_accounts[each.key].id
-    subresource_names               = ["blob"]
-  }
-  tags                        = var.common_tags
-}
+    def cleanlistdata(self, uniqdata):        
+        # Step 1: Remove HTML tags
+        no_html = re.sub(r'<[^>]+>', '', uniqdata)            
+        # Step 2: Replace multiple spaces with a single space
+        single_spaced = re.sub(r'\s+', ' ', no_html)            
+        # Step 3: Strip leading and trailing whitespace
+        cleaned = single_spaced.strip()
+        # text = text.translate(str.maketrans('', '', string.punctuation))
+        return cleaned  
+    
+    async def expand_contractions(text):
+        contractions_dict = {
+            "aren't": "are not",
+            "can't": "cannot",
+            "could've": "could have",
+            "couldn't": "could not",
+            "didn't": "did not",
+            "doesn't": "does not",
+            "don't": "do not",
+            "hadn't": "had not",
+            "hasn't": "has not",
+            "haven't": "have not",
+            "he'd": "he had",
+            "he'll": "he will",
+            "he's": "he is",
+            "I'd": "I had",
+            "I'll": "I will",
+            "I'm": "I am",
+            "I've": "I have",
+            "isn't": "is not",
+            "it'd": "it had",
+            "it'll": "it will",
+            "it's": "it is",
+            "let's": "let us",
+            "might've": "might have",
+            "mightn't": "might not",
+            "must've": "must have",
+            "mustn't": "must not",
+            "shan't": "shall not",
+            "she'd": "she had",
+            "she'll": "she will",
+            "she's": "she is",
+            "should've": "should have",
+            "shouldn't": "should not",
+            "that's": "that is",
+            "there's": "there is",
+            "they'd": "they had",
+            "they'll": "they will",
+            "they're": "they are",
+            "they've": "they have",
+            "wasn't": "was not",
+            "we'd": "we had",
+            "we're": "we are",
+            "we've": "we have",
+            "weren't": "were not",
+            "what's": "what is",
+            "where's": "where is",
+            "who's": "who is",
+            "won't": "will not",
+            "would've": "would have",
+            "wouldn't": "would not",
+            "you'd": "you had",
+            "you'll": "you will",
+            "you're": "you are",
+            "you've": "you have"
+        }
 
-resource "azurerm_private_dns_zone_virtual_network_link" "dns_vnet_link" {
-  name                  = format("blob-dns-vnet-link-%s", var.environment)
-  resource_group_name   = var.resource_group_name
-  private_dns_zone_name = var.blob_dns_zone_name
-  registration_enabled  = false
-  virtual_network_id    = var.vnet_id
-  tags                  = var.common_tags
-}
-
- Error: Unsupported argument
-│ 
-│   on ../modules/storage/main.tf line 17, in module "storage_accounts":
-│   17:   allow_blob_public_access   = false
-│ 
-│ An argument named "allow_blob_public_access" is not expected here.
+        # Replace contractions in text
+        for contraction, full_form in contractions_dict.items():
+            text = text.replace(contraction, full_form)            
+            # existing_list = ['I']
+            # new_words = "could have".split()
+            # existing_list.extend(new_words)
+            # print(existing_list)
+        return await text
