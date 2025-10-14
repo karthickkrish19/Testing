@@ -1,0 +1,336 @@
+import re
+import asyncio
+import string
+from typing import List, Set, Dict, Any, Optional, Union
+from collections import defaultdict
+import unicodedata
+from concurrent.futures import ThreadPoolExecutor
+import logging
+from functools import lru_cache
+import time
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class AdvancedTextTokenizer:
+    """
+    High-performance text tokenizer with advanced cleaning and normalization features.
+    """
+    
+    def __init__(self, 
+                 remove_punctuation: bool = True,
+                 remove_numbers: bool = False,
+                 remove_extra_spaces: bool = True,
+                 expand_contractions: bool = True,
+                 lowercase: bool = True,
+                 remove_stopwords: bool = False,
+                 min_word_length: int = 1,
+                 max_workers: int = None):
+        
+        self.remove_punctuation = remove_punctuation
+        self.remove_numbers = remove_numbers
+        self.remove_extra_spaces = remove_extra_spaces
+        self.expand_contractions = expand_contractions
+        self.lowercase = lowercase
+        self.remove_stopwords = remove_stopwords
+        self.min_word_length = min_word_length
+        self.max_workers = max_workers or min(32, (os.cpu_count() or 1) + 4)
+        
+        # Pre-compiled regex patterns for performance
+        self._html_pattern = re.compile(r'<[^>]+>')
+        self._url_pattern = re.compile(r'https?://\S+|www\.\S+')
+        self._email_pattern = re.compile(r'\S+@\S+\.\S+')
+        self._extra_spaces_pattern = re.compile(r'\s+')
+        self._punctuation_pattern = re.compile(f'[{re.escape(string.punctuation)}]')
+        self._number_pattern = re.compile(r'\b\d+\b')
+        self._word_pattern = re.compile(r'\b\w+\b')
+        
+        # Advanced contraction mapping
+        self._contractions_dict = self._build_contractions_dict()
+        
+        # Common stopwords (can be extended)
+        self._stopwords = self._load_stopwords()
+    
+    def _build_contractions_dict(self) -> Dict[str, str]:
+        """Build comprehensive contractions dictionary."""
+        return {
+            # Standard contractions
+            "aren't": "are not", "can't": "cannot", "could've": "could have",
+            "couldn't": "could not", "didn't": "did not", "doesn't": "does not",
+            "don't": "do not", "hadn't": "had not", "hasn't": "has not",
+            "haven't": "have not", "he'd": "he would", "he'll": "he will",
+            "he's": "he is", "I'd": "I would", "I'll": "I will", "I'm": "I am",
+            "I've": "I have", "isn't": "is not", "it'd": "it would",
+            "it'll": "it will", "it's": "it is", "let's": "let us",
+            "might've": "might have", "must've": "must have", "mustn't": "must not",
+            "shan't": "shall not", "she'd": "she would", "she'll": "she will",
+            "she's": "she is", "should've": "should have", "shouldn't": "should not",
+            "that's": "that is", "there's": "there is", "they'd": "they would",
+            "they'll": "they will", "they're": "they are", "they've": "they have",
+            "wasn't": "was not", "we'd": "we would", "we're": "we are",
+            "we've": "we have", "weren't": "were not", "what's": "what is",
+            "where's": "where is", "who's": "who is", "won't": "will not",
+            "would've": "would have", "wouldn't": "would not", "you'd": "you would",
+            "you'll": "you will", "you're": "you are", "you've": "you have",
+            
+            # Informal contractions
+            "gonna": "going to", "wanna": "want to", "gotta": "got to",
+            "ima": "I am going to", "ain't": "am not", "kinda": "kind of",
+            "sorta": "sort of", "lemme": "let me", "gimme": "give me"
+        }
+    
+    def _load_stopwords(self) -> Set[str]:
+        """Load common stopwords."""
+        return {
+            'i', 'me', 'my', 'myself', 'we', 'our', 'ours', 'ourselves', 'you', 
+            "you're", "you've", "you'll", "you'd", 'your', 'yours', 'yourself', 
+            'yourselves', 'he', 'him', 'his', 'himself', 'she', "she's", 'her', 
+            'hers', 'herself', 'it', "it's", 'its', 'itself', 'they', 'them', 
+            'their', 'theirs', 'themselves', 'what', 'which', 'who', 'whom', 
+            'this', 'that', "that'll", 'these', 'those', 'am', 'is', 'are', 
+            'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'having', 
+            'do', 'does', 'did', 'doing', 'a', 'an', 'the', 'and', 'but', 'or', 
+            'because', 'until', 'while', 'of', 'at', 'by', 'for', 'with', 'about', 
+            'against', 'between', 'into', 'through', 'during', 'before', 'after', 
+            'above', 'below', 'to', 'from', 'up', 'down', 'in', 'out', 'on', 'off', 
+            'over', 'under', 'again', 'further', 'then', 'once', 'here', 'there', 
+            'when', 'where', 'why', 'how', 'all', 'any', 'both', 'each', 'few', 
+            'more', 'most', 'other', 'some', 'such', 'no', 'nor', 'not', 'only', 
+            'own', 'same', 'so', 'than', 'too', 'very', 's', 't', 'can', 'will', 
+            'just', 'don', "don't", 'should', "should've", 'now', 'd', 'll', 'm', 
+            'o', 're', 've', 'y', 'ain', 'aren', "aren't", 'couldn', "couldn't", 
+            'didn', "didn't", 'doesn', "doesn't", 'hadn', "hadn't", 'hasn', "hasn't", 
+            'haven', "haven't", 'isn', "isn't", 'ma', 'mightn', "mightn't", 'mustn', 
+            "mustn't", 'needn', "needn't", 'shan', "shan't", 'shouldn', "shouldn't", 
+            'wasn', "wasn't", 'weren', "weren't", 'won', "won't", 'wouldn', "wouldn't"
+        }
+    
+    @lru_cache(maxsize=1000)
+    def _expand_contraction_cached(self, word: str) -> str:
+        """Cache contraction expansion for performance."""
+        return self._contractions_dict.get(word.lower(), word)
+    
+    def _expand_contractions_sync(self, text: str) -> str:
+        """Synchronously expand contractions in text."""
+        words = text.split()
+        expanded_words = []
+        
+        for word in words:
+            # Handle possessive forms and common contractions
+            clean_word = word.strip(".,!?;:\"'()[]{}")
+            expanded = self._expand_contraction_cached(clean_word.lower())
+            
+            if expanded != clean_word.lower():
+                # Preserve original capitalization for proper nouns
+                if word[0].isupper():
+                    expanded = expanded.capitalize()
+                expanded_words.append(expanded)
+            else:
+                expanded_words.append(word)
+        
+        return ' '.join(expanded_words)
+    
+    async def expand_contractions_async(self, text: str) -> str:
+        """Asynchronously expand contractions."""
+        return await asyncio.get_event_loop().run_in_executor(
+            None, self._expand_contractions_sync, text
+        )
+    
+    def _normalize_text(self, text: str) -> str:
+        """Perform basic text normalization."""
+        if not isinstance(text, str):
+            return ""
+        
+        # Remove HTML tags
+        text = self._html_pattern.sub(' ', text)
+        
+        # Remove URLs and emails
+        text = self._url_pattern.sub(' ', text)
+        text = self._email_pattern.sub(' ', text)
+        
+        # Normalize unicode characters
+        text = unicodedata.normalize('NFKD', text)
+        
+        if self.lowercase:
+            text = text.lower()
+        
+        if self.expand_contractions:
+            text = self._expand_contractions_sync(text)
+        
+        if self.remove_punctuation:
+            text = self._punctuation_pattern.sub(' ', text)
+        
+        if self.remove_numbers:
+            text = self._number_pattern.sub(' ', text)
+        
+        if self.remove_extra_spaces:
+            text = self._extra_spaces_pattern.sub(' ', text).strip()
+        
+        return text
+    
+    def _tokenize_single(self, text: str) -> List[str]:
+        """Tokenize a single text string."""
+        normalized_text = self._normalize_text(text)
+        tokens = self._word_pattern.findall(normalized_text)
+        
+        # Filter tokens based on criteria
+        filtered_tokens = []
+        for token in tokens:
+            if len(token) < self.min_word_length:
+                continue
+            if self.remove_stopwords and token.lower() in self._stopwords:
+                continue
+            filtered_tokens.append(token)
+        
+        return filtered_tokens
+    
+    async def _tokenize_single_async(self, text: str) -> List[str]:
+        """Asynchronously tokenize a single text string."""
+        return await asyncio.get_event_loop().run_in_executor(
+            None, self._tokenize_single, text
+        )
+    
+    def remove_duplicates(self, tokens: List[str]) -> List[str]:
+        """Remove duplicate tokens while preserving order."""
+        seen: Set[str] = set()
+        unique_tokens = []
+        
+        for token in tokens:
+            if token not in seen:
+                seen.add(token)
+                unique_tokens.append(token)
+        
+        return unique_tokens
+    
+    def tokenize(self, texts: Union[str, List[str]]) -> Union[List[str], List[List[str]]]:
+        """
+        Tokenize text or list of texts.
+        
+        Args:
+            texts: Single text string or list of text strings
+            
+        Returns:
+            List of tokens or list of token lists
+        """
+        if isinstance(texts, str):
+            return self._tokenize_single(texts)
+        
+        start_time = time.time()
+        results = [self._tokenize_single(text) for text in texts]
+        logger.info(f"Tokenized {len(texts)} texts in {time.time() - start_time:.4f}s")
+        
+        return results
+    
+    async def tokenize_async(self, texts: Union[str, List[str]]) -> Union[List[str], List[List[str]]]:
+        """
+        Asynchronously tokenize text or list of texts.
+        """
+        if isinstance(texts, str):
+            return await self._tokenize_single_async(texts)
+        
+        start_time = time.time()
+        
+        # Process texts concurrently
+        tasks = [self._tokenize_single_async(text) for text in texts]
+        results = await asyncio.gather(*tasks)
+        
+        logger.info(f"Async tokenized {len(texts)} texts in {time.time() - start_time:.4f}s")
+        return results
+    
+    def tokenize_batch_parallel(self, texts: List[str]) -> List[List[str]]:
+        """
+        Tokenize texts in parallel using ThreadPoolExecutor.
+        """
+        start_time = time.time()
+        
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            results = list(executor.map(self._tokenize_single, texts))
+        
+        logger.info(f"Parallel tokenized {len(texts)} texts in {time.time() - start_time:.4f}s")
+        return results
+    
+    def get_token_frequency(self, tokens: List[str]) -> Dict[str, int]:
+        """Get frequency distribution of tokens."""
+        frequency = defaultdict(int)
+        for token in tokens:
+            frequency[token] += 1
+        return dict(frequency)
+    
+    def clean_and_tokenize(self, texts: Union[str, List[str]], 
+                          remove_duplicates: bool = False,
+                          return_frequency: bool = False) -> Any:
+        """
+        Comprehensive cleaning and tokenization pipeline.
+        
+        Args:
+            texts: Input text or list of texts
+            remove_duplicates: Whether to remove duplicate tokens
+            return_frequency: Whether to return token frequencies
+            
+        Returns:
+            Tokens or frequency distribution based on parameters
+        """
+        tokens = self.tokenize(texts)
+        
+        if remove_duplicates:
+            if isinstance(tokens[0], list):
+                tokens = [self.remove_duplicates(doc_tokens) for doc_tokens in tokens]
+            else:
+                tokens = self.remove_duplicates(tokens)
+        
+        if return_frequency:
+            if isinstance(tokens[0], list):
+                return [self.get_token_frequency(doc_tokens) for doc_tokens in tokens]
+            else:
+                return self.get_token_frequency(tokens)
+        
+        return tokens
+
+
+# Example usage and performance testing
+async def demo():
+    """Demonstrate the tokenizer capabilities."""
+    
+    # Sample texts for testing
+    sample_texts = [
+        "I can't believe we're going to the party! Don't forget to bring your stuff.",
+        "The company's revenue increased by 15% in Q1 2024. Visit https://example.com for details.",
+        "She's gonna be there at 8 PM. We should've left earlier!",
+        "<html><body>This is a <b>test</b> email: test@example.com</body></html>",
+        "The quick brown fox jumps over the lazy dog. The dog wasn't amused."
+    ]
+    
+    # Initialize tokenizer with different configurations
+    tokenizer = AdvancedTextTokenizer(
+        remove_punctuation=True,
+        remove_numbers=False,
+        expand_contractions=True,
+        lowercase=True,
+        remove_stopwords=False,
+        min_word_length=2
+    )
+    
+    print("=== Synchronous Processing ===")
+    sync_tokens = tokenizer.tokenize(sample_texts)
+    for i, tokens in enumerate(sync_tokens):
+        print(f"Text {i+1}: {tokens}")
+    
+    print("\n=== Asynchronous Processing ===")
+    async_tokens = await tokenizer.tokenize_async(sample_texts)
+    for i, tokens in enumerate(async_tokens):
+        print(f"Text {i+1}: {tokens}")
+    
+    print("\n=== Parallel Processing ===")
+    parallel_tokens = tokenizer.tokenize_batch_parallel(sample_texts)
+    for i, tokens in enumerate(parallel_tokens):
+        print(f"Text {i+1}: {tokens}")
+    
+    print("\n=== With Frequency Analysis ===")
+    freq_results = tokenizer.clean_and_tokenize(sample_texts, return_frequency=True)
+    for i, freq in enumerate(freq_results):
+        print(f"Text {i+1} frequencies: {dict(sorted(freq.items(), key=lambda x: x[1], reverse=True)[:5])}")
+
+if __name__ == "__main__":
+    import os
+    asyncio.run(demo())
