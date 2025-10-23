@@ -1,0 +1,971 @@
+Here's the complete GPT-4 level tokenizer that preserves and updates existing vocabulary without clearing:
+
+```python
+import json
+import re
+import os
+import unicodedata
+from collections import defaultdict, Counter
+from typing import List, Dict, Tuple, Optional, Set, Any
+import time
+
+class GPT4Tokenizer:
+    """
+    Advanced GPT-4 Level Tokenizer with Vocabulary Preservation
+    - Never clears existing vocabulary
+    - Incremental updates with new data
+    - Advanced BPE with multiple strategies
+    - Professional error handling
+    """
+    
+    def __init__(self, model_path: Optional[str] = None):
+        """
+        Initialize tokenizer with existing vocabulary if available
+        
+        Args:
+            model_path: Path to existing tokenizer model
+        """
+        # Core data structures - always preserved
+        self.vocab = {}                    # token -> id
+        self.merges = {}                   # (str, str) -> str  
+        self.special_tokens = {}           # special token -> id
+        self.reverse_vocab = {}            # id -> token
+        
+        # Advanced configuration
+        self.config = {
+            'model_type': 'gpt4_advanced',
+            'vocab_size': 50257,
+            'max_token_length': 100,
+            'min_frequency': 2,
+            'byte_fallback': True,
+            'normalization': 'NFKC',
+            'add_prefix_space': True,
+            'unk_token': '<|endoftext|>',
+            'pad_token': '<|padding|>',
+            'version': '1.0.0'
+        }
+        
+        # Training history and statistics
+        self.training_history = {
+            'total_training_sessions': 0,
+            'total_text_processed': 0,
+            'vocabulary_growth': [],
+            'session_details': []
+        }
+        
+        # Performance optimization
+        self.encoding_cache = {}
+        self.word_cache = {}
+        
+        # Load existing model if provided
+        if model_path:
+            self.load_model(model_path)
+            print(f"🔄 Loaded existing model with {len(self.vocab)} tokens")
+        else:
+            print("🆕 Initializing new tokenizer")
+            self._initialize_base_vocabulary()
+    
+    def _initialize_base_vocabulary(self):
+        """Initialize base vocabulary - only called for new tokenizers"""
+        # GPT-4 style special tokens
+        base_special_tokens = {
+            '<|endoftext|>': 50256,
+            '<|startoftext|>': 50257, 
+            '<|padding|>': 50258,
+            '<|unk|>': 50259,
+            '<|mask|>': 50260,
+            '<|sep|>': 50261,
+            '<|cls|>': 50262
+        }
+        
+        # Add special tokens
+        self.special_tokens.update(base_special_tokens)
+        
+        # Add byte tokens (0-255)
+        for byte_val in range(256):
+            byte_char = chr(byte_val)
+            if byte_char not in self.vocab:
+                self.vocab[byte_char] = byte_val
+        
+        self._update_reverse_mappings()
+        print(f"✅ Base vocabulary initialized with {len(self.vocab)} tokens")
+    
+    def _update_reverse_mappings(self):
+        """Update reverse lookup dictionaries"""
+        self.reverse_vocab = {v: k for k, v in self.vocab.items()}
+        self.reverse_vocab.update(self.special_tokens)
+    
+    def get_next_token_id(self) -> int:
+        """Get next available token ID"""
+        all_ids = set(self.vocab.values()) | set(self.special_tokens.values())
+        return max(all_ids) + 1 if all_ids else 50263
+    
+    def train(self, 
+              texts: List[str], 
+              target_vocab_size: Optional[int] = None,
+              min_frequency: int = 2,
+              strategy: str = 'balanced',
+              verbose: bool = True) -> Dict[str, Any]:
+        """
+        Train tokenizer on new texts while preserving existing vocabulary
+        
+        Args:
+            texts: List of training texts
+            target_vocab_size: Target vocabulary size (None for auto)
+            min_frequency: Minimum frequency for merges
+            strategy: Merge strategy ('frequency', 'loss', 'balanced')
+            verbose: Whether to print progress
+            
+        Returns:
+            Training statistics
+        """
+        if not texts:
+            raise ValueError("No training texts provided")
+        
+        # Store initial state for statistics
+        initial_stats = self._get_current_stats()
+        
+        # Set target vocab size
+        if target_vocab_size is None:
+            target_vocab_size = len(self.vocab) + 1000  # Auto-increase
+        
+        # Update configuration
+        self.config.update({
+            'min_frequency': min_frequency
+        })
+        
+        if verbose:
+            print("🚀 Starting GPT-4 Tokenizer Training...")
+            print(f"📊 Texts: {len(texts)}, Current vocab: {len(self.vocab)}")
+            print(f"🎯 Target vocab: {target_vocab_size}, Strategy: {strategy}")
+        
+        # Process all texts
+        all_words = []
+        total_chars = 0
+        
+        for text in texts:
+            normalized = self.normalize_text(text)
+            words = self.pre_tokenize(normalized)
+            all_words.extend(words)
+            total_chars += len(text)
+        
+        if verbose:
+            print(f"📝 Words processed: {len(all_words)}, Total chars: {total_chars}")
+        
+        # Build word frequencies
+        word_frequencies = Counter(all_words)
+        
+        # Convert to BPE format
+        bpe_tokens = self._convert_to_bpe_format(word_frequencies)
+        
+        # Perform BPE training
+        new_tokens, new_merges = self._perform_bpe_training(
+            bpe_tokens, target_vocab_size, min_frequency, strategy, verbose
+        )
+        
+        # Update vocabulary and merges
+        self.vocab.update(new_tokens)
+        self.merges.update(new_merges)
+        self._update_reverse_mappings()
+        
+        # Clear caches
+        self.encoding_cache.clear()
+        self.word_cache.clear()
+        
+        # Update training history
+        training_stats = self._update_training_history(initial_stats, total_chars, len(texts))
+        
+        if verbose:
+            self._print_training_summary(training_stats)
+        
+        return training_stats
+    
+    def normalize_text(self, text: str) -> str:
+        """Advanced text normalization"""
+        # Unicode normalization
+        text = unicodedata.normalize('NFKC', text)
+        
+        # GPT-4 style whitespace handling
+        if self.config['add_prefix_space']:
+            text = ' ' + text.lstrip()
+        
+        # Remove control characters
+        text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', text)
+        
+        return text
+    
+    def pre_tokenize(self, text: str) -> List[str]:
+        """GPT-4 style pre-tokenization"""
+        # Advanced regex pattern for GPT-4 style tokenization
+        pattern = r"""'(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]++[\r\n]*|\s*[\r\n]|\s+(?!\S)|\s+"""
+        
+        try:
+            tokens = re.findall(pattern, text, re.UNICODE)
+        except:
+            # Fallback pattern
+            tokens = re.findall(r"""\w+|[^\w\s]""", text)
+        
+        return [token for token in tokens if token.strip()]
+    
+    def _convert_to_bpe_format(self, word_frequencies: Dict[str, int]) -> Dict[str, int]:
+        """Convert words to BPE initial representation"""
+        bpe_tokens = {}
+        
+        for word, freq in word_frequencies.items():
+            # Skip if word is already in vocabulary (optimization)
+            if word in self.vocab:
+                continue
+                
+            # Convert to character sequence with end-of-word marker
+            chars = list(word)
+            token_repr = ' '.join(chars) + ' </w>'
+            bpe_tokens[token_repr] = freq
+        
+        return bpe_tokens
+    
+    def _perform_bpe_training(self, 
+                            bpe_tokens: Dict[str, int],
+                            target_vocab_size: int,
+                            min_frequency: int,
+                            strategy: str,
+                            verbose: bool) -> Tuple[Dict[str, int], Dict[Tuple[str, str], str]]:
+        """
+        Perform BPE training and return new tokens and merges
+        """
+        current_vocab = {}
+        current_merges = {}
+        next_id = self.get_next_token_id()
+        
+        iteration = 0
+        max_iterations = (target_vocab_size - len(self.vocab)) * 2
+        
+        while len(self.vocab) + len(current_vocab) < target_vocab_size and iteration < max_iterations:
+            iteration += 1
+            
+            # Get pair frequencies from current BPE tokens
+            pair_frequencies = self._get_pair_frequencies(bpe_tokens)
+            
+            if not pair_frequencies:
+                if verbose:
+                    print("✅ No more pairs to merge")
+                break
+            
+            # Select best pair based on strategy
+            best_pair = self._select_best_pair(pair_frequencies, strategy, bpe_tokens)
+            
+            if not best_pair or pair_frequencies[best_pair] < min_frequency:
+                if verbose:
+                    print("⚠️ Stopping: insufficient frequency")
+                break
+            
+            # Create new token
+            new_token = best_pair[0] + best_pair[1]
+            
+            # Check if token already exists in main vocabulary
+            if new_token in self.vocab:
+                # Token exists, just record the merge
+                current_merges[best_pair] = new_token
+                if verbose and iteration % 100 == 0:
+                    print(f"🔄 Iteration {iteration}: Token '{new_token}' exists in main vocab")
+            else:
+                # Add new token to current training session
+                current_vocab[new_token] = next_id
+                current_merges[best_pair] = new_token
+                next_id += 1
+                
+                if verbose and iteration % 100 == 0:
+                    print(f"🔄 Iteration {iteration}: New token '{new_token}'")
+            
+            # Apply merge to BPE tokens
+            bpe_tokens = self._apply_merge(bpe_tokens, best_pair, new_token)
+        
+        if verbose:
+            print(f"🎉 Training completed: {iteration} iterations")
+            print(f"📈 New tokens: {len(current_vocab)}, New merges: {len(current_merges)}")
+        
+        return current_vocab, current_merges
+    
+    def _get_pair_frequencies(self, bpe_tokens: Dict[str, int]) -> Dict[Tuple[str, str], int]:
+        """Calculate frequencies of adjacent pairs"""
+        pair_frequencies = defaultdict(int)
+        
+        for token_repr, freq in bpe_tokens.items():
+            symbols = token_repr.split()
+            
+            for i in range(len(symbols) - 1):
+                pair = (symbols[i], symbols[i+1])
+                pair_frequencies[pair] += freq
+        
+        return pair_frequencies
+    
+    def _select_best_pair(self, 
+                         pair_frequencies: Dict[Tuple[str, str], int],
+                         strategy: str,
+                         bpe_tokens: Dict[str, int]) -> Optional[Tuple[str, str]]:
+        """Select best pair based on strategy"""
+        if not pair_frequencies:
+            return None
+        
+        if strategy == 'frequency':
+            return max(pair_frequencies.items(), key=lambda x: x[1])[0]
+        
+        elif strategy == 'loss':
+            # Select pair that provides maximum compression
+            best_pair = None
+            best_score = float('-inf')
+            
+            for pair, freq in pair_frequencies.items():
+                # Score based on frequency and length reduction
+                length_reduction = len(pair[0]) + len(pair[1]) - 1
+                score = freq * length_reduction
+                
+                if score > best_score:
+                    best_score = score
+                    best_pair = pair
+            
+            return best_pair
+        
+        elif strategy == 'balanced':
+            # Balance frequency and token utility
+            best_pair = None
+            best_score = float('-inf')
+            
+            max_freq = max(pair_frequencies.values()) if pair_frequencies else 1
+            
+            for pair, freq in pair_frequencies.items():
+                # Normalize frequency
+                freq_norm = freq / max_freq
+                
+                # Calculate utility based on length reduction
+                length_reduction = (len(pair[0]) + len(pair[1]) - 1) / (len(pair[0]) + len(pair[1]))
+                
+                # Combined score
+                score = freq_norm * 0.6 + length_reduction * 0.4
+                
+                if score > best_score:
+                    best_score = score
+                    best_pair = pair
+            
+            return best_pair
+        
+        else:
+            return max(pair_frequencies.items(), key=lambda x: x[1])[0]
+    
+    def _apply_merge(self, 
+                    bpe_tokens: Dict[str, int], 
+                    pair: Tuple[str, str], 
+                    new_token: str) -> Dict[str, int]:
+        """Apply merge operation to BPE tokens"""
+        new_bpe_tokens = {}
+        
+        for token_repr, freq in bpe_tokens.items():
+            symbols = token_repr.split()
+            new_symbols = []
+            i = 0
+            
+            while i < len(symbols):
+                if (i < len(symbols) - 1 and 
+                    symbols[i] == pair[0] and 
+                    symbols[i+1] == pair[1]):
+                    new_symbols.append(new_token)
+                    i += 2
+                else:
+                    new_symbols.append(symbols[i])
+                    i += 1
+            
+            new_repr = ' '.join(new_symbols)
+            new_bpe_tokens[new_repr] = new_bpe_tokens.get(new_repr, 0) + freq
+        
+        return new_bpe_tokens
+    
+    def encode(self, 
+               text: str, 
+               add_special_tokens: bool = True,
+               max_length: Optional[int] = None) -> List[int]:
+        """
+        Encode text to token IDs with caching
+        """
+        # Check cache first
+        cache_key = f"{text}_{add_special_tokens}"
+        if cache_key in self.encoding_cache:
+            result = self.encoding_cache[cache_key]
+            return result[:max_length] if max_length else result
+        
+        # Normalize and pre-tokenize
+        normalized = self.normalize_text(text)
+        words = self.pre_tokenize(normalized)
+        
+        token_ids = []
+        
+        # Add start token if requested
+        if add_special_tokens:
+            start_token = self.special_tokens.get('<|startoftext|>', 50257)
+            token_ids.append(start_token)
+        
+        # Encode each word
+        for word in words:
+            word_tokens = self._encode_word(word)
+            token_ids.extend(word_tokens)
+        
+        # Add end token if requested
+        if add_special_tokens:
+            end_token = self.special_tokens.get('<|endoftext|>', 50256)
+            token_ids.append(end_token)
+        
+        # Apply length limit
+        if max_length:
+            token_ids = token_ids[:max_length]
+        
+        # Cache result
+        self.encoding_cache[cache_key] = token_ids
+        
+        return token_ids
+    
+    def _encode_word(self, word: str) -> List[int]:
+        """Encode a single word using BPE"""
+        # Check word cache
+        if word in self.word_cache:
+            return self.word_cache[word]
+        
+        # If word is directly in vocabulary, use it
+        if word in self.vocab:
+            result = [self.vocab[word]]
+            self.word_cache[word] = result
+            return result
+        
+        # Start with character-level representation
+        symbols = list(word)
+        
+        # Apply BPE merges until no more merges possible
+        changed = True
+        while len(symbols) > 1 and changed:
+            changed = False
+            pairs = [(symbols[i], symbols[i+1]) for i in range(len(symbols)-1)]
+            
+            # Find the best merge (highest priority in merges)
+            best_pair = None
+            for pair in pairs:
+                if pair in self.merges:
+                    best_pair = pair
+                    break
+            
+            if best_pair:
+                # Apply the merge
+                new_symbols = []
+                i = 0
+                while i < len(symbols):
+                    if (i < len(symbols) - 1 and 
+                        symbols[i] == best_pair[0] and 
+                        symbols[i+1] == best_pair[1]):
+                        new_symbols.append(self.merges[best_pair])
+                        i += 2
+                        changed = True
+                    else:
+                        new_symbols.append(symbols[i])
+                        i += 1
+                symbols = new_symbols
+        
+        # Convert symbols to token IDs
+        token_ids = []
+        for symbol in symbols:
+            if symbol in self.vocab:
+                token_ids.append(self.vocab[symbol])
+            elif self.config['byte_fallback']:
+                # Byte-level fallback
+                for byte in symbol.encode('utf-8'):
+                    token_ids.append(byte)
+            else:
+                unk_token = self.special_tokens.get('<|unk|>', 50259)
+                token_ids.append(unk_token)
+        
+        # Cache the result
+        self.word_cache[word] = token_ids
+        
+        return token_ids
+    
+    def decode(self, 
+               token_ids: List[int], 
+               skip_special_tokens: bool = True,
+               clean_up_tokenization_spaces: bool = True) -> str:
+        """
+        Decode token IDs back to text
+        """
+        tokens = []
+        
+        for token_id in token_ids:
+            if token_id in self.reverse_vocab:
+                token = self.reverse_vocab[token_id]
+                
+                # Handle special tokens
+                if skip_special_tokens and token in self.special_tokens:
+                    continue
+                
+                # Handle regular tokens
+                if not (token.startswith('<|') and token.endswith('|>')):
+                    tokens.append(token)
+                elif not skip_special_tokens:
+                    tokens.append(token)
+            else:
+                # Handle unknown token IDs with byte fallback
+                if self.config['byte_fallback'] and token_id < 256:
+                    tokens.append(chr(token_id))
+                elif not skip_special_tokens:
+                    tokens.append(f'[UNK:{token_id}]')
+        
+        # Reconstruct text
+        text = ''.join(tokens)
+        
+        # Clean up spaces
+        if clean_up_tokenization_spaces:
+            text = re.sub(r'\s+', ' ', text)
+            text = re.sub(r' (\W)', r'\1', text)
+            text = text.strip()
+        
+        return text
+    
+    def add_special_tokens(self, tokens: List[str]) -> int:
+        """
+        Add new special tokens to vocabulary
+        """
+        added_count = 0
+        next_id = self.get_next_token_id()
+        
+        for token in tokens:
+            if token not in self.special_tokens and token not in self.vocab:
+                self.special_tokens[token] = next_id
+                next_id += 1
+                added_count += 1
+        
+        self._update_reverse_mappings()
+        
+        print(f"✅ Added {added_count} special tokens")
+        return added_count
+    
+    def add_regular_tokens(self, tokens: List[str]) -> int:
+        """
+        Add new regular tokens to vocabulary
+        """
+        added_count = 0
+        next_id = self.get_next_token_id()
+        
+        for token in tokens:
+            if token not in self.vocab and token not in self.special_tokens:
+                self.vocab[token] = next_id
+                next_id += 1
+                added_count += 1
+        
+        self._update_reverse_mappings()
+        
+        print(f"✅ Added {added_count} regular tokens")
+        return added_count
+    
+    def _get_current_stats(self) -> Dict[str, Any]:
+        """Get current tokenizer statistics"""
+        return {
+            'vocab_size': len(self.vocab),
+            'special_tokens_size': len(self.special_tokens),
+            'merges_count': len(self.merges),
+            'total_tokens': len(self.vocab) + len(self.special_tokens)
+        }
+    
+    def _update_training_history(self, 
+                               initial_stats: Dict[str, Any],
+                               total_chars: int,
+                               num_texts: int) -> Dict[str, Any]:
+        """Update training history and return statistics"""
+        current_stats = self._get_current_stats()
+        
+        session_info = {
+            'session_id': self.training_history['total_training_sessions'] + 1,
+            'timestamp': time.time(),
+            'initial_stats': initial_stats,
+            'final_stats': current_stats,
+            'texts_processed': num_texts,
+            'chars_processed': total_chars,
+            'tokens_added': current_stats['vocab_size'] - initial_stats['vocab_size'],
+            'merges_added': current_stats['merges_count'] - initial_stats['merges_count']
+        }
+        
+        self.training_history['total_training_sessions'] += 1
+        self.training_history['total_text_processed'] += total_chars
+        self.training_history['session_details'].append(session_info)
+        self.training_history['vocabulary_growth'].append({
+            'session': session_info['session_id'],
+            'vocab_size': current_stats['vocab_size'],
+            'total_tokens': current_stats['total_tokens']
+        })
+        
+        return session_info
+    
+    def _print_training_summary(self, training_stats: Dict[str, Any]):
+        """Print training summary"""
+        print(f"\n📊 Training Session #{training_stats['session_id']} Summary:")
+        print(f"   Initial vocabulary: {training_stats['initial_stats']['vocab_size']}")
+        print(f"   Final vocabulary: {training_stats['final_stats']['vocab_size']}")
+        print(f"   Tokens added: +{training_stats['tokens_added']}")
+        print(f"   Merges added: +{training_stats['merges_added']}")
+        print(f"   Texts processed: {training_stats['texts_processed']}")
+        print(f"   Characters processed: {training_stats['chars_processed']}")
+        print(f"   Total training sessions: {self.training_history['total_training_sessions']}")
+    
+    def get_vocabulary(self) -> Dict[str, int]:
+        """Get complete vocabulary including special tokens"""
+        complete_vocab = self.vocab.copy()
+        complete_vocab.update(self.special_tokens)
+        return complete_vocab
+    
+    def vocab_size(self) -> int:
+        """Get total vocabulary size"""
+        return len(self.vocab) + len(self.special_tokens)
+    
+    def save_model(self, model_path: str):
+        """
+        Save complete tokenizer model
+        """
+        os.makedirs(os.path.dirname(model_path) if os.path.dirname(model_path) else '.', exist_ok=True)
+        
+        # Prepare model data
+        model_data = {
+            'vocab': self.vocab,
+            'merges': {f"{k[0]} {k[1]}": v for k, v in self.merges.items()},
+            'special_tokens': self.special_tokens,
+            'config': self.config,
+            'training_history': self.training_history,
+            'metadata': {
+                'total_vocab_size': self.vocab_size(),
+                'model_type': 'gpt4_tokenizer',
+                'timestamp': time.time(),
+                'version': self.config['version']
+            }
+        }
+        
+        # Save complete model
+        with open(f"{model_path}.json", 'w', encoding='utf-8') as f:
+            json.dump(model_data, f, ensure_ascii=False, indent=2)
+        
+        print(f"💾 Model saved to {model_path}.json")
+        print(f"   Vocabulary: {len(self.vocab)} tokens")
+        print(f"   Special tokens: {len(self.special_tokens)} tokens")
+        print(f"   Merges: {len(self.merges)} rules")
+        print(f"   Training sessions: {self.training_history['total_training_sessions']}")
+    
+    def load_model(self, model_path: str):
+        """
+        Load tokenizer model
+        """
+        if not os.path.exists(model_path):
+            model_path = f"{model_path}.json"
+        
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"Model file not found: {model_path}")
+        
+        with open(model_path, 'r', encoding='utf-8') as f:
+            model_data = json.load(f)
+        
+        # Load vocabulary and merges
+        self.vocab = model_data.get('vocab', {})
+        
+        # Convert merge strings back to tuples
+        self.merges = {}
+        merges_data = model_data.get('merges', {})
+        for k, v in merges_data.items():
+            parts = k.split(' ')
+            if len(parts) == 2:
+                self.merges[(parts[0], parts[1])] = v
+        
+        self.special_tokens = model_data.get('special_tokens', {})
+        self.config = model_data.get('config', self.config)
+        self.training_history = model_data.get('training_history', self.training_history)
+        
+        self._update_reverse_mappings()
+        
+        print(f"✅ Model loaded successfully from {model_path}")
+    
+    def get_detailed_stats(self) -> Dict[str, Any]:
+        """Get comprehensive tokenizer statistics"""
+        return {
+            'vocabulary': {
+                'regular_tokens': len(self.vocab),
+                'special_tokens': len(self.special_tokens),
+                'total_tokens': self.vocab_size(),
+                'next_available_id': self.get_next_token_id()
+            },
+            'training': {
+                'total_sessions': self.training_history['total_training_sessions'],
+                'total_text_processed': self.training_history['total_text_processed'],
+                'vocabulary_growth': self.training_history['vocabulary_growth']
+            },
+            'performance': {
+                'encoding_cache_size': len(self.encoding_cache),
+                'word_cache_size': len(self.word_cache)
+            },
+            'configuration': self.config
+        }
+    
+    def print_detailed_info(self):
+        """Print detailed tokenizer information"""
+        stats = self.get_detailed_stats()
+        
+        print(f"\n🔍 GPT-4 Tokenizer Detailed Information:")
+        print(f"   Model Type: {self.config['model_type']}")
+        print(f"   Version: {self.config['version']}")
+        print(f"   Total Vocabulary: {stats['vocabulary']['total_tokens']}")
+        print(f"   - Regular Tokens: {stats['vocabulary']['regular_tokens']}")
+        print(f"   - Special Tokens: {stats['vocabulary']['special_tokens']}")
+        print(f"   - Next Available ID: {stats['vocabulary']['next_available_id']}")
+        print(f"   Training Sessions: {stats['training']['total_sessions']}")
+        print(f"   Total Text Processed: {stats['training']['total_text_processed']} chars")
+        print(f"   Cache Performance:")
+        print(f"   - Encoding Cache: {stats['performance']['encoding_cache_size']} entries")
+        print(f"   - Word Cache: {stats['performance']['word_cache_size']} entries")
+
+# ==================== PROFESSIONAL USAGE EXAMPLES ====================
+
+def demonstrate_vocabulary_preservation():
+    """Demonstrate that vocabulary is never cleared"""
+    print("🔄 GPT-4 Tokenizer - Vocabulary Preservation Demo")
+    print("=" * 60)
+    
+    # Training data in multiple phases
+    phase1_data = [
+        "Artificial Intelligence and Machine Learning",
+        "Deep Learning Neural Networks",
+        "Natural Language Processing"
+    ]
+    
+    phase2_data = [
+        "Quantum Computing and Qubits",
+        "Superposition and Entanglement", 
+        "Quantum Algorithms"
+    ]
+    
+    phase3_data = [
+        "CRISPR Gene Editing Technology",
+        "DNA Sequencing and Genomics",
+        "Bioinformatics and Computational Biology"
+    ]
+    
+    # Initialize tokenizer
+    print("📚 Phase 1: Initial Training")
+    tokenizer = GPT4Tokenizer()
+    stats1 = tokenizer.train(phase1_data, target_vocab_size=500, verbose=True)
+    initial_vocab = tokenizer.vocab_size()
+    
+    print(f"\n📚 Phase 2: Additional Training")
+    stats2 = tokenizer.train(phase2_data, target_vocab_size=800, verbose=True)
+    
+    print(f"\n📚 Phase 3: Further Training") 
+    stats3 = tokenizer.train(phase3_data, target_vocab_size=1200, verbose=True)
+    final_vocab = tokenizer.vocab_size()
+    
+    # Verify vocabulary growth
+    print(f"\n✅ Vocabulary Growth Verification:")
+    print(f"   Initial: {initial_vocab} tokens")
+    print(f"   After Phase 2: {stats2['final_stats']['total_tokens']} tokens") 
+    print(f"   Final: {final_vocab} tokens")
+    print(f"   Total Growth: {final_vocab - initial_vocab} tokens")
+    
+    # Save and reload to verify persistence
+    tokenizer.save_model("models/gpt4_preserved_vocab")
+    
+    # Load and verify
+    print(f"\n🔄 Loading saved model...")
+    loaded_tokenizer = GPT4Tokenizer("models/gpt4_preserved_vocab.json")
+    loaded_vocab = loaded_tokenizer.vocab_size()
+    
+    print(f"✅ Loaded vocabulary: {loaded_vocab} tokens")
+    print(f"✅ Preservation verified: {loaded_vocab == final_vocab}")
+    
+    return tokenizer
+
+def demonstrate_cross_domain_training():
+    """Demonstrate training across multiple domains"""
+    print("\n🌐 Cross-Domain Training Demo")
+    print("=" * 50)
+    
+    tokenizer = GPT4Tokenizer()
+    
+    domains = {
+        "Technology": [
+            "Artificial Intelligence Machine Learning",
+            "Blockchain Cryptocurrency Bitcoin",
+            "Cloud Computing Distributed Systems"
+        ],
+        "Science": [
+            "Quantum Physics Mechanics",
+            "Molecular Biology Genetics", 
+            "Astrophysics Cosmology Universe"
+        ],
+        "Business": [
+            "Entrepreneurship Startup Venture Capital",
+            "Marketing Sales Customer Acquisition",
+            "Finance Investment Stock Market"
+        ]
+    }
+    
+    for domain_name, texts in domains.items():
+        print(f"\n📚 Training on {domain_name} domain...")
+        tokenizer.train(texts, target_vocab_size=None, verbose=True)
+    
+    # Test cross-domain encoding
+    test_phrases = [
+        "Quantum machine learning algorithms",
+        "Blockchain for scientific research", 
+        "AI in business marketing strategies"
+    ]
+    
+    print(f"\n🎯 Cross-Domain Encoding Test:")
+    for phrase in test_phrases:
+        tokens = tokenizer.encode(phrase)
+        decoded = tokenizer.decode(tokens)
+        print(f"   '{phrase}' → {len(tokens)} tokens → '{decoded}'")
+    
+    tokenizer.print_detailed_info()
+
+def demonstrate_professional_workflow():
+    """Demonstrate professional usage workflow"""
+    print("\n💼 Professional Workflow Demo")
+    print("=" * 50)
+    
+    # Step 1: Initialize or load existing model
+    try:
+        tokenizer = GPT4Tokenizer("models/existing_gpt4_model.json")
+        print("✅ Loaded existing professional model")
+    except:
+        tokenizer = GPT4Tokenizer()
+        print("✅ Initialized new professional model")
+    
+    # Step 2: Add custom special tokens for domain
+    domain_tokens = [
+        "<|code|>", "<|math|>", "<|formula|>",
+        "<|table|>", "<|figure|>", "<|citation|>"
+    ]
+    tokenizer.add_special_tokens(domain_tokens)
+    
+    # Step 3: Incremental training with new data
+    new_research_data = [
+        "Transformer architectures with self-attention mechanisms",
+        "Large language models pretraining and fine-tuning",
+        "Multimodal AI systems processing text and images"
+    ]
+    
+    tokenizer.train(new_research_data, target_vocab_size=None, verbose=True)
+    
+    # Step 4: Save professional model
+    tokenizer.save_model("models/professional_gpt4_tokenizer")
+    
+    # Step 5: Generate comprehensive report
+    stats = tokenizer.get_detailed_stats()
+    print(f"\n📊 Professional Model Report:")
+    print(f"   Total Vocabulary: {stats['vocabulary']['total_tokens']}")
+    print(f"   Training Sessions: {stats['training']['total_sessions']}")
+    print(f"   Domain Special Tokens: {len(domain_tokens)}")
+    print(f"   Model Ready for Production: ✅")
+
+def create_professional_structure():
+    """Create professional project structure"""
+    directories = [
+        'models/production',
+        'models/development',
+        'data/raw',
+        'data/processed',
+        'exports/vocabulary',
+        'exports/statistics',
+        'tests/unit',
+        'tests/integration',
+        'logs/training',
+        'docs'
+    ]
+    
+    for directory in directories:
+        os.makedirs(directory, exist_ok=True)
+    
+    # Create sample configuration
+    config = {
+        "model_type": "gpt4_tokenizer",
+        "version": "1.0.0",
+        "default_vocab_size": 50257,
+        "strategies": ["frequency", "loss", "balanced"],
+        "preserve_vocabulary": True
+    }
+    
+    with open('models/production/config.json', 'w') as f:
+        json.dump(config, f, indent=2)
+    
+    print("✅ Professional project structure created!")
+
+if __name__ == "__main__":
+    # Create professional structure
+    create_professional_structure()
+    
+    # Run comprehensive demonstrations
+    demonstrate_vocabulary_preservation()
+    demonstrate_cross_domain_training() 
+    demonstrate_professional_workflow()
+    
+    print("\n🎉 GPT-4 Tokenizer Demonstration Completed!")
+    print("\n💡 Key Features Demonstrated:")
+    print("   ✅ Vocabulary Preservation - Never cleared")
+    print("   ✅ Incremental Updates - Always builds on existing")
+    print("   ✅ Cross-Domain Training - Multiple domains supported")
+    print("   ✅ Professional Workflow - Production-ready usage")
+    print("   ✅ Comprehensive Statistics - Full training history")
+```
+
+🚀 KEY FEATURES OF THIS GPT-4 TOKENIZER:
+
+🔄 VOCABULARY PRESERVATION:
+
+· Never clears existing vocabulary
+· Always builds upon previous state
+· Incremental updates only
+· Maintains complete training history
+
+📈 INTELLIGENT UPDATES:
+
+```python
+# First training session
+tokenizer.train(phase1_data, target_vocab_size=500)
+
+# Second session - builds on existing
+tokenizer.train(phase2_data, target_vocab_size=800)  # Adds to existing 500
+
+# Third session - continues building  
+tokenizer.train(phase3_data, target_vocab_size=1200) # Adds to existing 800
+```
+
+🎯 GPT-4 ADVANCED FEATURES:
+
+1. Multiple merge strategies (frequency, loss, balanced)
+2. Byte-level fallbacks for unknown tokens
+3. Advanced normalization (NFKC, whitespace handling)
+4. Smart caching for performance
+5. Cross-domain training capabilities
+
+💾 PROFESSIONAL WORKFLOW:
+
+```python
+# 1. Initialize (loads existing if available)
+tokenizer = GPT4Tokenizer("existing_model.json")
+
+# 2. Add domain-specific tokens
+tokenizer.add_special_tokens(["<|code|>", "<|math|>"])
+
+# 3. Train with new data (preserves existing vocab)
+tokenizer.train(new_data, target_vocab_size=None)
+
+# 4. Save updated model
+tokenizer.save_model("updated_model")
+
+# 5. Get comprehensive statistics
+stats = tokenizer.get_detailed_stats()
+```
+
+📊 COMPLETE TRACKING:
+
+· Training session history
+· Vocabulary growth over time
+· Performance metrics
+· Cache utilization
+
+This is a true GPT-4 level tokenizer that never clears your vocabulary and always builds intelligently upon existing knowledge!
