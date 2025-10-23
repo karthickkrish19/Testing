@@ -1,0 +1,331 @@
+import math
+import random
+from collections import defaultdict, deque
+
+# ---- BPE Tokenizer ----
+class BPE:
+    def __init__(self, vocab_size=50):
+        self.vocab_size = vocab_size
+        self.merges = []
+        self.vocab = {}
+
+    def get_stats(self, vocab):
+        pairs = defaultdict(int)
+        for word, freq in vocab.items():
+            symbols = word.split()
+            for i in range(len(symbols)-1):
+                pairs[symbols[i], symbols[i+1]] += freq
+        return pairs
+
+    def merge_vocab(self, pair, vocab_in):
+        vocab_out = {}
+        replacement = ''.join(pair)
+        for word in vocab_in:
+            new_word = []
+            i = 0
+            symbols = word.split()
+            while i < len(symbols):
+                if i < len(symbols)-1 and (symbols[i], symbols[i+1]) == pair:
+                    new_word.append(replacement)
+                    i += 2
+                else:
+                    new_word.append(symbols[i])
+                    i += 1
+            vocab_out[' '.join(new_word)] = vocab_in[word]
+        return vocab_out
+
+    def train(self, text):
+        vocab = defaultdict(int)
+        for word in text.split():
+            word = ' '.join(list(word)) + ' </w>'
+            vocab[word] += 1
+        while len(self.merges) < self.vocab_size:
+            pairs = self.get_stats(vocab)
+            if not pairs:
+                break
+            best = max(pairs, key=pairs.get)
+            vocab = self.merge_vocab(best, vocab)
+            self.merges.append(best)
+        self.vocab = vocab
+
+    def encode(self, word):
+        word = list(word) + ['</w>']
+        while True:
+            pairs = [(word[i], word[i+1]) for i in range(len(word)-1)]
+            candidates = [pair for pair in pairs if pair in self.merges]
+            if not candidates:
+                break
+            best = min(candidates, key=lambda x: self.merges.index(x))
+            i = 0
+            new_word = []
+            while i < len(word):
+                if i < len(word)-1 and (word[i], word[i+1]) == best:
+                    new_word.append(''.join(best))
+                    i += 2
+                else:
+                    new_word.append(word[i])
+                    i += 1
+            word = new_word
+        if word[-1] == '</w>':
+            word = word[:-1]
+        return word
+
+# ---- Utilities ----
+def zeros(dim):
+    if isinstance(dim,int):
+        return [0.0]*dim
+    if isinstance(dim, tuple):
+        if len(dim) == 1:
+            return [0.0]*dim[0]
+        return [zeros(dim[1:]) for _ in range(dim[0])]
+def random_matrix(rows, cols, scale=1.0):
+    return [[random.gauss(0, scale / math.sqrt(cols)) for _ in range(cols)] for _ in range(rows)]
+def matmul(A, B):
+    rows, cols = len(A), len(B[0])
+    assert len(A[0]) == len(B), "Matrix mismatch"
+    result = zeros((rows, cols))
+    for i in range(rows):
+        for j in range(cols):
+            s = 0.0
+            for k in range(len(B)):
+                s += A[i][k]*B[k][j]
+            result[i][j] = s
+    return result
+def matmul_vector(M, v):
+    assert len(M[0]) == len(v), "Mat-Vec mismatch"
+    return [sum(M[i][j]*v[j] for j in range(len(v))) for i in range(len(M))]
+def add_vectors(a, b):
+    return [a[i] + b[i] for i in range(len(a))]
+def scalar_vector_mul(s, v):
+    return [s*x for x in v]
+def softmax(x, temperature=1.0):
+    max_x = max(x)
+    exps = [math.exp((i - max_x)/temperature) for i in x]
+    s = sum(exps)
+    return [e/s for e in exps]
+def relu(x):
+    return [max(0, i) for i in x]
+
+def sample_from_probs(probs):
+    r = random.random()
+    cumulative = 0.0
+    for i, p in enumerate(probs):
+        cumulative += p
+        if r < cumulative:
+            return i
+    return len(probs) - 1
+
+# ---- Layer Norm ----
+class LayerNorm:
+    def __init__(self, dim, eps=1e-5):
+        self.gamma = [1.0]*dim
+        self.beta = [0.0]*dim
+        self.eps = eps
+    def __call__(self, x):
+        mean = sum(x)/len(x)
+        variance = sum((xi-mean)**2 for xi in x)/len(x)
+        return [self.gamma[i] * (x[i]-mean)/math.sqrt(variance+self.eps)+self.beta[i] for i in range(len(x))]
+
+# ---- Self Attention ----
+class SelfAttention:
+    def __init__(self,d_model,num_heads):
+        assert d_model % num_heads == 0
+        self.num_heads = num_heads
+        self.d_head = d_model//num_heads
+        self.Wq = random_matrix(d_model,d_model)
+        self.Wk = random_matrix(d_model,d_model)
+        self.Wv = random_matrix(d_model,d_model)
+        self.Wo = random_matrix(d_model,d_model)
+    def split_heads(self,x):
+        seq_len = len(x)
+        heads = []
+        for h in range(self.num_heads):
+            head = []
+            start = h*self.d_head
+            end = (h+1)*self.d_head
+            for t in range(seq_len):
+                head.append(x[t][start:end])
+            heads.append(head)
+        return heads
+    def combine_heads(self,heads):
+        seq_len = len(heads[0])
+        combined = []
+        for t in range(seq_len):
+            combined.append(sum([heads[h][t] for h in range(len(heads))],[]))
+        return combined
+    def scaled_dot_product_attention(self,Q,K,V):
+        d_k = len(K[0])
+        scores = []
+        for qi in Q:
+            row = []
+            for ki in K:
+                dot = sum(qij*kij for qij,kij in zip(qi,ki))/math.sqrt(d_k)
+                row.append(dot)
+            scores.append(row)
+        attn_weights = [softmax(row,temperature=0.8) for row in scores]  # Slight temp for smoothness
+        output = []
+        for i in range(len(attn_weights)):
+            weighted_sum = zeros(len(V[0]))
+            for j in range(len(attn_weights[i])):
+                weighted_sum = add_vectors(weighted_sum, scalar_vector_mul(attn_weights[i][j], V[j]))
+            output.append(weighted_sum)
+        return output
+    def __call__(self,x):
+        Q = [matmul_vector(self.Wq,xi) for xi in x]
+        K = [matmul_vector(self.Wk,xi) for xi in x]
+        V = [matmul_vector(self.Wv,xi) for xi in x]
+        Qh = self.split_heads(Q)
+        Kh = self.split_heads(K)
+        Vh = self.split_heads(V)
+        heads_out = []
+        for h in range(self.num_heads):
+            out = self.scaled_dot_product_attention(Qh[h], Kh[h], Vh[h])
+            heads_out.append(out)
+        combined = self.combine_heads(heads_out)
+        out_proj = [matmul_vector(self.Wo,xi) for xi in combined]
+        return out_proj
+
+# ---- Feed Forward ----
+class FeedForward:
+    def __init__(self,d_model,d_ff):
+        self.W1 = random_matrix(d_model,d_ff)
+        self.b1 = zeros(d_ff)
+        self.W2 = random_matrix(d_ff,d_model)
+        self.b2 = zeros(d_model)
+    def __call__(self,x):
+        x1 = [relu(add_vectors(matmul_vector(self.W1,xi),self.b1)) for xi in x]
+        x2 = [add_vectors(matmul_vector(self.W2,xi),self.b2) for xi in x1]
+        return x2
+
+# ---- Transformer Block ----
+class TransformerBlock:
+    def __init__(self,d_model,num_heads,d_ff):
+        self.attn = SelfAttention(d_model,num_heads)
+        self.ln1 = LayerNorm(d_model)
+        self.ff = FeedForward(d_model,d_ff)
+        self.ln2 = LayerNorm(d_model)
+    def __call__(self,x):
+        attn_out = self.attn(x)
+        x = [self.ln1(add_vectors(x[i], attn_out[i])) for i in range(len(x))]
+        ff_out = self.ff(x)
+        x = [self.ln2(add_vectors(x[i], ff_out[i])) for i in range(len(x))]
+        return x
+
+# ---- GPT Model ----
+class SimpleGPT:
+    def __init__(self,vocab,d_model=64,num_heads=4,num_layers=3,d_ff=128,max_len=64):
+        self.vocab = vocab
+        self.vocab_size = len(vocab)
+        self.token_to_id = {tok:i for i,tok in enumerate(vocab)}
+        self.id_to_token = {i:tok for tok,i in self.token_to_id.items()}
+        self.d_model = d_model
+        self.max_len = max_len
+        self.token_embeddings = random_matrix(self.vocab_size,d_model)
+        self.position_embeddings = random_matrix(max_len,d_model)
+        self.layers = [TransformerBlock(d_model,num_heads,d_ff) for _ in range(num_layers)]
+        self.ln_f = LayerNorm(d_model)
+        self.head = random_matrix(d_model,self.vocab_size)
+    def encode(self,tokens):
+        return [self.token_to_id.get(tok,self.token_to_id[self.vocab[0]]) for tok in tokens]
+    def decode(self,ids):
+        return [self.id_to_token.get(id,'') for id in ids]
+    def forward(self,input_ids):
+        seq_len = len(input_ids)
+        x = [add_vectors(self.token_embeddings[id], self.position_embeddings[i]) for i, id in enumerate(input_ids)]
+        for layer in self.layers:
+            x = layer(x)
+        x = [self.ln_f(xi) for xi in x]
+        logits = [matmul_vector(self.head, xi) for xi in x]
+        return logits
+    def predict(self,input_ids, temperature=1.0):
+        logits = self.forward(input_ids)
+        last_logits = logits[-1]
+        probs = softmax(last_logits, temperature=temperature)
+        sampled_token = sample_from_probs(probs)
+        return sampled_token
+
+# --- Simple Rules for Greetings ---
+RULES = {
+    "hi": "Hello!",
+    "hello": "Hi there!",
+    "how are you": "I'm good, how are you?",
+    "what is your name": "I am a simple Python LLM.",
+    "bye": "Goodbye, have a nice day!",
+}
+
+def rule_based_response(text):
+    text_lower = text.lower()
+    for k,v in RULES.items():
+        if k in text_lower:
+            return v
+    return None
+
+# ---- Context-aware conversation manager ----
+class ConversationMemory:
+    def __init__(self, max_turns=5):
+        self.memory = deque(maxlen=max_turns)  # store turns, both user and bot
+
+    def add_user_input(self, text):
+        self.memory.append(('user', text))
+
+    def add_bot_response(self, text):
+        self.memory.append(('bot', text))
+
+    def get_context(self):
+        # Join last turns to a single string prompt
+        context = ''
+        for speaker, text in self.memory:
+            prefix = 'User: ' if speaker == 'user' else 'Bot: '
+            context += prefix + text + ' '
+        return context.strip()
+
+# --- Text Generation using model & context ---
+
+def generate_text(model, bpe, conversation_memory, max_length=30, temperature=0.8):
+    context = conversation_memory.get_context()
+    tokens = bpe.encode(context)
+    input_ids = model.encode(tokens[-model.max_len:])  # trim input to max_len
+    generated_ids = input_ids[:]
+    for _ in range(max_length):
+        next_token_id = model.predict(generated_ids, temperature=temperature)
+        generated_ids.append(next_token_id)
+        if model.id_to_token[next_token_id] == '</w>':
+            break
+    generated_tokens = model.decode(generated_ids)
+    text_full = ''.join(generated_tokens).replace('</w>', ' ').strip()
+    # Return only the newly generated part
+    return text_full[len(context):].strip() if len(text_full) > len(context) else text_full
+
+# --- Main Chatbot Loop ---
+def advanced_chatbot():
+    corpus = ("hi hello how are you i am fine thank you bye goodbye see you later "
+              "tell me a joke what can you do who created you where are you from "
+              "what's your favorite color i like coding python machine learning")
+    bpe = BPE(vocab_size=100)
+    bpe.train(corpus)
+    vocab_tokens = set()
+    for word in corpus.split():
+        vocab_tokens.update(bpe.encode(word))
+    vocab_list = sorted(vocab_tokens)
+    model = SimpleGPT(vocab_list, num_layers=3, max_len=64, d_model=128)
+
+    conv_memory = ConversationMemory(max_turns=6)
+    print("Advanced Python LLM Chatbot ready! Type 'exit' to quit.")
+    while True:
+        user_input = input("You: ").strip()
+        if user_input.lower() in ['exit', 'quit']:
+            print("Bot: Goodbye!")
+            break
+        conv_memory.add_user_input(user_input)
+        # Rule-based reply check
+        response = rule_based_response(user_input)
+        if response is None:
+            # generate reply
+            response = generate_text(model, bpe, conv_memory, max_length=40, temperature=0.9)
+            if not response:
+                response = "Sorry, I couldn't generate a response. Can you ask something else?"
+        conv_memory.add_bot_response(response)
+        print("Bot:", response)
+
+if __name__ == "__main__":
+    advanced_chatbot()
