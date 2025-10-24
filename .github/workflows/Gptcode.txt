@@ -1,0 +1,290 @@
+import json
+import re
+import os
+from collections import defaultdict
+
+
+def read_file(filepath):
+    """Read file content safely"""
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            return f.read()
+    except FileNotFoundError:
+        print(f"File {filepath} not found.")
+        return ""
+    except Exception as e:
+        print(f"Error reading file: {e}")
+        return ""
+
+
+class Tokenizer:
+    def __init__(self, vocab_size=10000, min_frequency=2, output_dir="data/output"):
+        self.vocab_size = vocab_size
+        self.min_frequency = min_frequency
+        self.output_dir = output_dir
+
+        self.vocab = {}              # token -> id
+        self.merges = {}             # (a, b) -> merged_token
+        self.inverse_merges = {}     # merged_token -> (a, b)
+
+        self.special_tokens = {
+            "<|endoftext|>": 100257,
+            "<|padding|>": 100258,
+            "<|startoftext|>": 100259,
+            "<|unk|>": 100260,
+            "<|mask|>": 100261
+        }
+
+        self.next_token_id = max(self.special_tokens.values()) + 1
+        os.makedirs(self.output_dir, exist_ok=True)
+
+    # -------------------- TEXT CLEANING --------------------
+
+    def _process_clean(self, text):
+        """Clean and normalize text for all languages"""
+        text = re.sub(r'<.*?>', '', text)  # Remove HTML tags
+        text = re.sub(r'https?://\S+|www\.\S+', '', text)  # Remove URLs
+        text = re.sub(r'\s+', ' ', text).strip()  # Normalize whitespace
+        return text
+
+    # -------------------- VOCAB INITIALIZATION --------------------
+
+    def _initialize_vocab(self, text):
+        """Initialize vocabulary with characters + special tokens"""
+        for token, token_id in self.special_tokens.items():
+            self.vocab[token] = token_id
+
+        chars = sorted(set(text))
+        for char in chars:
+            if char.strip():
+                self.vocab[char] = self.next_token_id
+                self.next_token_id += 1
+
+    # -------------------- BPE STATS + MERGE --------------------
+
+    def _get_stats(self, words):
+        """Count frequency of adjacent symbol pairs"""
+        pairs = defaultdict(int)
+        for symbols, freq in words:
+            for i in range(len(symbols) - 1):
+                a, b = symbols[i], symbols[i + 1]
+                if a == "</w>" or b == "</w>":
+                    continue
+                pairs[(a, b)] += freq
+        return pairs
+
+    def _merge_vocab(self, pair, words):
+        """Merge the most frequent pair in all words"""
+        first, second = pair
+        new_symbol = first + second
+        new_words = []
+
+        for symbols, freq in words:
+            new_word = []
+            i = 0
+            while i < len(symbols):
+                if i < len(symbols) - 1 and (symbols[i], symbols[i + 1]) == pair:
+                    new_word.append(new_symbol)
+                    i += 2
+                else:
+                    new_word.append(symbols[i])
+                    i += 1
+            new_words.append((new_word, freq))
+        return new_words
+
+    # -------------------- TRAIN --------------------
+
+    def train(self, text):
+        """Train the BPE tokenizer"""
+        if not text:
+            print("❌ No text provided for training.")
+            return
+
+        print("🧹 Cleaning text...")
+        cleaned = self._process_clean(text)
+
+        print("🔤 Initializing vocabulary...")
+        self._initialize_vocab(cleaned)
+
+        words = cleaned.split()
+        word_freqs = defaultdict(int)
+        for word in words:
+            word_freqs[" ".join(list(word)) + " </w>"] += 1
+
+        vocab_words = [(key.split(), freq) for key, freq in word_freqs.items()]
+        merges_done = 0
+
+        print(f"🚀 Starting BPE training with {len(vocab_words)} unique words...")
+
+        while len(self.vocab) < self.vocab_size:
+            pairs = self._get_stats(vocab_words)
+            if not pairs:
+                print("⚠️ No more pairs to merge.")
+                break
+
+            best_pair = max(pairs, key=pairs.get)
+            if pairs[best_pair] < self.min_frequency:
+                print("⚠️ No more frequent pairs found.")
+                break
+
+            vocab_words = self._merge_vocab(best_pair, vocab_words)
+            merged_token = best_pair[0] + best_pair[1]
+
+            if merged_token not in self.vocab:
+                self.vocab[merged_token] = self.next_token_id
+                self.next_token_id += 1
+
+            self.merges[best_pair] = merged_token
+            self.inverse_merges[merged_token] = best_pair
+            merges_done += 1
+
+            if merges_done % 100 == 0:
+                print(f"🧩 Merges: {merges_done}, Vocab size: {len(self.vocab)}")
+
+            if len(self.vocab) >= self.vocab_size:
+                break
+
+        print(f"✅ Training completed. Total vocab: {len(self.vocab)}, merges: {len(self.merges)}")
+
+    # -------------------- TOKENIZATION --------------------
+
+    def _tokenize_word(self, word):
+        """Apply merges to a single word"""
+        tokens = list(word) + ["</w>"]
+
+        while True:
+            pairs = [(tokens[i], tokens[i + 1]) for i in range(len(tokens) - 1)]
+            merge_found = False
+
+            for pair in pairs:
+                if pair in self.merges:
+                    tokens = tokens[:pairs.index(pair)] + [self.merges[pair]] + tokens[pairs.index(pair) + 2:]
+                    merge_found = True
+                    break
+            if not merge_found:
+                break
+        return tokens
+
+    # -------------------- ENCODE / DECODE --------------------
+
+    def encode(self, text, add_special_tokens=True):
+        """Convert text → list of token IDs"""
+        cleaned = self._process_clean(text)
+        words = cleaned.split()
+        token_ids = []
+
+        if add_special_tokens:
+            token_ids.append(self.special_tokens["<|startoftext|>"])
+
+        for word in words:
+            tokens = self._tokenize_word(word)
+            for token in tokens:
+                if token in self.vocab:
+                    token_ids.append(self.vocab[token])
+                else:
+                    for char in token:
+                        token_ids.append(self.vocab.get(char, self.special_tokens["<|unk|>"]))
+
+        if add_special_tokens:
+            token_ids.append(self.special_tokens["<|endoftext|>"])
+
+        return token_ids
+
+    def decode(self, token_ids):
+        """Convert token IDs → text"""
+        id_to_token = {v: k for k, v in self.vocab.items()}
+        id_to_token.update({v: k for k, v in self.special_tokens.items()})
+
+        tokens = [id_to_token.get(tid, "<|unk|>") for tid in token_ids]
+
+        text = ""
+        for token in tokens:
+            if token in ("<|startoftext|>", "<|padding|>", "<|mask|>"):
+                continue
+            elif token == "<|endoftext|>":
+                break
+            elif token == "</w>":
+                text += " "
+            elif token.startswith("<|") and token.endswith("|>"):
+                continue
+            else:
+                text += token
+        return text.strip()
+
+    # -------------------- SAVE / LOAD --------------------
+
+    def save(self):
+        """Save vocabulary and merges"""
+        vocab_path = os.path.join(self.output_dir, "vocab.json")
+        merges_path = os.path.join(self.output_dir, "merges.json")
+
+        with open(vocab_path, "w", encoding="utf-8") as f:
+            json.dump(self.vocab, f, indent=2, ensure_ascii=False)
+
+        with open(merges_path, "w", encoding="utf-8") as f:
+            json.dump([list(k) for k in self.merges.keys()], f, indent=2, ensure_ascii=False)
+
+        print(f"💾 Model saved in {self.output_dir}")
+
+    def load(self):
+        """Load vocabulary and merges"""
+        vocab_path = os.path.join(self.output_dir, "vocab.json")
+        merges_path = os.path.join(self.output_dir, "merges.json")
+
+        try:
+            with open(vocab_path, "r", encoding="utf-8") as f:
+                self.vocab = json.load(f)
+
+            with open(merges_path, "r", encoding="utf-8") as f:
+                merges_list = json.load(f)
+                self.merges = {}
+                self.inverse_merges = {}
+                for pair in merges_list:
+                    merged = pair[0] + pair[1]
+                    self.merges[tuple(pair)] = merged
+                    self.inverse_merges[merged] = tuple(pair)
+
+            print(f"✅ Model loaded from {self.output_dir}")
+            return True
+        except FileNotFoundError:
+            print("❌ Model files not found. Please train the tokenizer first.")
+            return False
+
+
+# -------------------- DEMO USAGE --------------------
+
+if __name__ == "__main__":
+    # Sample text (supports English + Tamil for demo)
+    sample_text = """
+    Hello world! This is a test of the multilingual BPE tokenizer.
+    வணக்கம் உலகம்! இது ஒரு சோதனை ஆகும்.
+    """
+
+    filepath = "data/input/userdata.txt"
+    getdata = read_file(filepath)
+
+    if not getdata:
+        print("Using sample text for demonstration.")
+        getdata = sample_text
+
+    tokenizer = Tokenizer(vocab_size=500, min_frequency=1)
+    tokenizer.train(getdata)
+    tokenizer.save()
+
+    # Test encoding/decoding
+    test_text = "வணக்கம் world!"
+    encoded = tokenizer.encode(test_text)
+    decoded = tokenizer.decode(encoded)
+
+    print(f"\n🧾 Original: {test_text}")
+    print(f"🔢 Encoded: {encoded}")
+    print(f"🗣️ Decoded: {decoded}")
+
+    # Test load + encode/decode again
+    print("\nTesting loaded model:")
+    tokenizer2 = Tokenizer()
+    if tokenizer2.load():
+        encoded2 = tokenizer2.encode("Hello வணக்கம்")
+        decoded2 = tokenizer2.decode(encoded2)
+        print(f"🔢 Encoded: {encoded2}")
+        print(f"🗣️ Decoded: {decoded2}")
