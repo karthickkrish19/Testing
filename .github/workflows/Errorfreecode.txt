@@ -1,0 +1,317 @@
+import json
+import re
+import os
+from collections import defaultdict
+
+def read_file(filepath):
+    """Read file content with error handling"""
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            return f.read()
+    except Exception as e:
+        print(f"Error reading file {filepath}: {e}")
+        return None
+
+class BPETokenizer:
+    def __init__(self, vocab_size=5000, min_frequency=2, output_dir="data/output"):
+        self.vocab_size = vocab_size
+        self.min_frequency = min_frequency
+        self.output_dir = output_dir
+        self.vocab = {}
+        self.merges = []  # Store merge operations
+        self.special_tokens = {
+            "<|endoftext|>": 100257,
+            "<|padding|>": 100258,
+            "<|startoftext|>": 100259,
+            "<|unk|>": 100260,
+            "<|mask|>": 100261
+        }
+        # Initialize with special tokens
+        for token, idx in self.special_tokens.items():
+            self.vocab[token] = idx
+        
+        os.makedirs(self.output_dir, exist_ok=True)
+
+    def basic_clean(self, text):
+        """Basic text cleaning"""
+        # Remove extra whitespace
+        text = re.sub(r'\s+', ' ', text)
+        # Remove problematic characters but keep basic text
+        text = ''.join(char for char in text if char.isprintable() or char in ['\n', '\t'])
+        return text.strip()
+
+    def get_stats(self, vocab):
+        """Get frequency of pairs in vocabulary"""
+        pairs = defaultdict(int)
+        for word, freq in vocab.items():
+            symbols = word.split()
+            for i in range(len(symbols) - 1):
+                pair = (symbols[i], symbols[i + 1])
+                pairs[pair] += freq
+        return pairs
+
+    def merge_vocab(self, pair, vocab):
+        """Merge a pair in the vocabulary"""
+        bigram = ' '.join(pair)
+        replacement = ''.join(pair)
+        new_vocab = {}
+        pattern = re.compile(r'(?<!\S)' + re.escape(bigram) + r'(?!\S)')
+        
+        for word, freq in vocab.items():
+            new_word = pattern.sub(replacement, word)
+            new_vocab[new_word] = freq
+        
+        return new_vocab
+
+    def train(self, text):
+        """Train BPE tokenizer"""
+        if not text:
+            print("No text provided for training")
+            return
+
+        print("Cleaning text...")
+        text = self.basic_clean(text)
+        
+        if not text:
+            print("Text is empty after cleaning")
+            return
+
+        # Build initial vocabulary (character level)
+        words = text.split()
+        if not words:
+            print("No words found after splitting")
+            return
+
+        vocab = defaultdict(int)
+        for word in words:
+            # Add word with space-separated characters and end-of-word token
+            chars = ' '.join(list(word)) + ' </w>'
+            vocab[chars] += 1
+
+        print(f"Initial vocabulary size: {len(vocab)}")
+        print(f"Target vocabulary size: {self.vocab_size}")
+
+        # Build base vocabulary with characters
+        base_vocab = set()
+        for word in vocab:
+            for char in word.split():
+                if char not in base_vocab and char != ' ':
+                    base_vocab.add(char)
+        
+        # Initialize vocab with base characters
+        current_id = max(self.special_tokens.values()) + 1
+        for char in sorted(base_vocab):
+            if char not in self.vocab:
+                self.vocab[char] = current_id
+                current_id += 1
+
+        # BPE training
+        self.merges = []
+        num_merges = 0
+        
+        while len(self.vocab) < self.vocab_size and num_merges < self.vocab_size:
+            pairs = self.get_stats(vocab)
+            if not pairs:
+                break
+                
+            best_pair = max(pairs, key=pairs.get)
+            best_freq = pairs[best_pair]
+            
+            if best_freq < self.min_frequency:
+                break
+                
+            # Perform merge
+            vocab = self.merge_vocab(best_pair, vocab)
+            self.merges.append(best_pair)
+            
+            # Add new token to vocabulary
+            new_token = ''.join(best_pair)
+            if new_token not in self.vocab:
+                self.vocab[new_token] = current_id
+                current_id += 1
+                
+            num_merges += 1
+            
+            if num_merges % 100 == 0:
+                print(f"Merges: {num_merges}, Vocabulary: {len(self.vocab)}")
+
+        print(f"Training completed. Final vocabulary size: {len(self.vocab)}")
+
+    def tokenize_word(self, word):
+        """Tokenize a single word using learned BPE merges"""
+        # Start with character-level tokens
+        tokens = list(word) + ['</w>']
+        
+        # Apply merges in the order they were learned
+        for merge in self.merges:
+            new_tokens = []
+            i = 0
+            while i < len(tokens):
+                if i < len(tokens) - 1 and tokens[i] == merge[0] and tokens[i + 1] == merge[1]:
+                    new_tokens.append(merge[0] + merge[1])
+                    i += 2
+                else:
+                    new_tokens.append(tokens[i])
+                    i += 1
+            tokens = new_tokens
+        
+        return tokens
+
+    def encode(self, text, add_special_tokens=True):
+        """Encode text to token IDs"""
+        if not text:
+            return []
+
+        text = self.basic_clean(text)
+        words = text.split()
+        token_ids = []
+
+        if add_special_tokens:
+            token_ids.append(self.special_tokens["<|startoftext|>"])
+
+        for word in words:
+            tokens = self.tokenize_word(word)
+            for token in tokens:
+                if token in self.vocab:
+                    token_ids.append(self.vocab[token])
+                else:
+                    # Try character-level fallback
+                    for char in token:
+                        if char in self.vocab:
+                            token_ids.append(self.vocab[char])
+                        else:
+                            token_ids.append(self.special_tokens["<|unk|>"])
+
+        if add_special_tokens:
+            token_ids.append(self.special_tokens["<|endoftext|>"])
+
+        return token_ids
+
+    def decode(self, token_ids):
+        """Decode token IDs back to text"""
+        if not token_ids:
+            return ""
+
+        # Create reverse mapping
+        id_to_token = {v: k for k, v in self.vocab.items()}
+        id_to_token.update(self.special_tokens)
+
+        # Convert tokens to string
+        tokens = []
+        for token_id in token_ids:
+            if token_id in id_to_token:
+                token = id_to_token[token_id]
+                # Skip special tokens in output
+                if token not in self.special_tokens:
+                    tokens.append(token)
+            else:
+                tokens.append("<|unk|>")
+
+        # Reconstruct text
+        text = ""
+        for token in tokens:
+            if token.endswith('</w>'):
+                text += token[:-4] + " "
+            else:
+                text += token
+
+        return text.strip()
+
+    def save(self):
+        """Save model files"""
+        vocab_path = os.path.join(self.output_dir, "vocab.json")
+        merges_path = os.path.join(self.output_dir, "merges.json")
+        
+        try:
+            with open(vocab_path, 'w', encoding='utf-8') as f:
+                json.dump(self.vocab, f, indent=2, ensure_ascii=False)
+            
+            with open(merges_path, 'w', encoding='utf-8') as f:
+                # Convert tuples to lists for JSON
+                merges_list = [list(pair) for pair in self.merges]
+                json.dump(merges_list, f, indent=2, ensure_ascii=False)
+            
+            print(f"Model saved to {self.output_dir}")
+            return True
+        except Exception as e:
+            print(f"Error saving model: {e}")
+            return False
+
+    def load(self):
+        """Load model files"""
+        vocab_path = os.path.join(self.output_dir, "vocab.json")
+        merges_path = os.path.join(self.output_dir, "merges.json")
+        
+        try:
+            with open(vocab_path, 'r', encoding='utf-8') as f:
+                self.vocab = json.load(f)
+            
+            with open(merges_path, 'r', encoding='utf-8') as f:
+                merges_list = json.load(f)
+                self.merges = [tuple(pair) for pair in merges_list]
+            
+            print(f"Model loaded from {self.output_dir}")
+            return True
+        except Exception as e:
+            print(f"Error loading model: {e}")
+            return False
+
+def main():
+    """Main function to test the tokenizer"""
+    
+    # Create sample data directory if it doesn't exist
+    os.makedirs('data/input', exist_ok=True)
+    
+    # Create a sample file if it doesn't exist
+    sample_file = 'data/input/userdata.txt'
+    if not os.path.exists(sample_file):
+        sample_text = """This is a sample text for training the BPE tokenizer.
+        Hello world! How are you today?
+        This tokenizer will learn to break down words into subword units.
+        Repeated words help the algorithm learn common patterns.
+        Testing testing one two three."""
+        
+        with open(sample_file, 'w', encoding='utf-8') as f:
+            f.write(sample_text)
+        print("Created sample data file")
+    
+    # Read data
+    data = read_file(sample_file)
+    if data is None:
+        print("Failed to read data file")
+        return
+    
+    print(f"Read {len(data)} characters of training data")
+    
+    # Initialize and train tokenizer
+    tokenizer = BPETokenizer(vocab_size=1000, min_frequency=1)
+    print("Starting training...")
+    tokenizer.train(data)
+    
+    # Save the model
+    tokenizer.save()
+    
+    # Test encoding/decoding
+    test_text = "hello world testing"
+    print(f"\nTesting with: '{test_text}'")
+    
+    encoded = tokenizer.encode(test_text)
+    decoded = tokenizer.decode(encoded)
+    
+    print(f"Encoded: {encoded}")
+    print(f"Decoded: '{decoded}'")
+    
+    # Test with loaded tokenizer
+    print("\nTesting with loaded tokenizer:")
+    new_tokenizer = BPETokenizer()
+    if new_tokenizer.load():
+        test_text2 = "hi there unknownword"
+        encoded2 = new_tokenizer.encode(test_text2)
+        decoded2 = new_tokenizer.decode(encoded2)
+        
+        print(f"Text: '{test_text2}'")
+        print(f"Encoded: {encoded2}")
+        print(f"Decoded: '{decoded2}'")
+
+if __name__ == "__main__":
+    main()
