@@ -1,0 +1,190 @@
+import os
+import json
+from collections import defaultdict, Counter
+
+
+class BPETokenizer:
+    def __init__(self, vocab_size=1000, special_tokens=None):
+        self.vocab_size = vocab_size
+        self.special_tokens = special_tokens or ["<unk>", "<pad>", "<bos>", "<eos>"]
+        self.vocab = {}
+        self.merges = []
+        self.bpe_ranks = {}
+
+    # --------------------------
+    # 1. Data reading utilities
+    # --------------------------
+    def _get_initial_tokens(self, word):
+        """Split word into characters with </w> at the end."""
+        return list(word) + ["</w>"]
+
+    def _read_corpus(self, text):
+        """Convert raw text into a list of words (character-level lists)."""
+        words = text.strip().split()
+        corpus = [self._get_initial_tokens(w) for w in words if w.strip()]
+        return corpus
+
+    # --------------------------
+    # 2. BPE Training
+    # --------------------------
+    def _get_pair_frequencies(self, corpus):
+        """Count frequency of each symbol pair in corpus."""
+        pairs = defaultdict(int)
+        for word in corpus:
+            for i in range(len(word) - 1):
+                pairs[(word[i], word[i + 1])] += 1
+        return pairs
+
+    def _merge_pair(self, pair, corpus):
+        """Merge the most frequent pair into a single symbol."""
+        merged_corpus = []
+        bigram = ''.join(pair)
+        for word in corpus:
+            new_word = []
+            i = 0
+            while i < len(word):
+                if i < len(word) - 1 and (word[i], word[i + 1]) == pair:
+                    new_word.append(bigram)
+                    i += 2
+                else:
+                    new_word.append(word[i])
+                    i += 1
+            merged_corpus.append(new_word)
+        return merged_corpus
+
+    def train(self, text):
+        """Train BPE model on text."""
+        corpus = self._read_corpus(text)
+        merges = []
+        token_set = set()
+
+        while len(token_set) < self.vocab_size:
+            pair_freqs = self._get_pair_frequencies(corpus)
+            if not pair_freqs:
+                break
+            best_pair = max(pair_freqs, key=pair_freqs.get)
+            merges.append(best_pair)
+            corpus = self._merge_pair(best_pair, corpus)
+            token_set.update([t for word in corpus for t in word])
+
+        self.merges = merges
+        self.bpe_ranks = {pair: i for i, pair in enumerate(self.merges)}
+
+        # Build vocab (include special tokens)
+        full_vocab = self.special_tokens + sorted(token_set)
+        self.vocab = {token: idx for idx, token in enumerate(full_vocab)}
+
+    # --------------------------
+    # 3. Encoding / Decoding
+    # --------------------------
+    def _apply_merges(self, tokens):
+        """Apply learned BPE merges in ranked order."""
+        while True:
+            pairs = [(tokens[i], tokens[i + 1]) for i in range(len(tokens) - 1)]
+            ranked = [(pair, self.bpe_ranks.get(pair, float('inf'))) for pair in pairs]
+            if not ranked:
+                break
+            best_pair, rank = min(ranked, key=lambda x: x[1])
+            if rank == float('inf'):
+                break
+
+            new_tokens = []
+            i = 0
+            while i < len(tokens):
+                if i < len(tokens) - 1 and (tokens[i], tokens[i + 1]) == best_pair:
+                    new_tokens.append(''.join(best_pair))
+                    i += 2
+                else:
+                    new_tokens.append(tokens[i])
+                    i += 1
+            tokens = new_tokens
+        return tokens
+
+    def encode(self, text, add_special_tokens=True):
+        """Convert text to list of token IDs."""
+        token_ids = []
+        if add_special_tokens:
+            token_ids.append(self.vocab[self.special_tokens[2]])  # <bos>
+
+        for word in text.strip().split():
+            chars = self._get_initial_tokens(word)
+            bpe_tokens = self._apply_merges(chars)
+            for token in bpe_tokens:
+                token_id = self.vocab.get(token, self.vocab[self.special_tokens[0]])  # <unk>
+                token_ids.append(token_id)
+
+        if add_special_tokens:
+            token_ids.append(self.vocab[self.special_tokens[3]])  # <eos>
+        return token_ids
+
+    def decode(self, token_ids, skip_special_tokens=True):
+        """Convert token IDs back to text."""
+        id_to_token = {v: k for k, v in self.vocab.items()}
+        tokens = [id_to_token.get(tid, "<unk>") for tid in token_ids]
+
+        if skip_special_tokens:
+            tokens = [t for t in tokens if t not in self.special_tokens]
+
+        words = []
+        current_word = ""
+        for token in tokens:
+            if token.endswith("</w>"):
+                current_word += token[:-4]
+                words.append(current_word)
+                current_word = ""
+            else:
+                current_word += token
+        if current_word:
+            words.append(current_word)
+        return " ".join(words)
+
+    # --------------------------
+    # 4. Save / Load
+    # --------------------------
+    def save(self, output_dir="bpe_output"):
+        """Save vocab and merges to output_dir."""
+        os.makedirs(output_dir, exist_ok=True)
+        with open(os.path.join(output_dir, "vocab.json"), "w", encoding="utf-8") as f:
+            json.dump(self.vocab, f, indent=2)
+
+        with open(os.path.join(output_dir, "merges.txt"), "w", encoding="utf-8") as f:
+            f.write("#version: 0.2\n")
+            for a, b in self.merges:
+                f.write(f"{a} {b}\n")
+
+    def load(self, output_dir="bpe_output"):
+        """Load vocab and merges from output_dir."""
+        with open(os.path.join(output_dir, "vocab.json"), "r", encoding="utf-8") as f:
+            self.vocab = json.load(f)
+
+        with open(os.path.join(output_dir, "merges.txt"), "r", encoding="utf-8") as f:
+            lines = f.read().splitlines()[1:]  # skip version
+            self.merges = [tuple(line.split()) for line in lines]
+        self.bpe_ranks = {pair: i for i, pair in enumerate(self.merges)}
+
+
+# --------------------------
+# 5. Example usage
+# --------------------------
+if __name__ == "__main__":
+    text_corpus = """hello world
+hello again
+this is a test
+hello there
+test world"""
+
+    tokenizer = BPETokenizer(vocab_size=50)
+    tokenizer.train(text_corpus)
+    tokenizer.save("bpe_output")
+
+    # Load and test
+    tokenizer2 = BPETokenizer()
+    tokenizer2.load("bpe_output")
+
+    test_text = "hello again"
+    encoded = tokenizer2.encode(test_text)
+    decoded = tokenizer2.decode(encoded)
+
+    print("Encoded:", encoded)
+    print("Decoded:", decoded)
+
