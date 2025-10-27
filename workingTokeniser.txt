@@ -9,17 +9,17 @@ def main():
         # if not getdata:
         #     print("No data found in file.")
         #     return
-        getdata = read_file(filepath)        
-        cleandata = _call_cleaning_process(getdata)
-        token = Tokenizer()
-        merges, vocab_tokens = token.train(cleandata)
-        token.save(vocab_tokens, merges)
+        # getdata = read_file(filepath)        
+        # cleandata = _call_cleaning_process(getdata)
+        # token = Tokenizer()
+        # merges, vocab_tokens = token.train(cleandata)
+        # token.save(vocab_tokens, merges)
 
         #load
-        cleaninput = _call_input_cleaning_process("hi hello How Difficult Is Machine Learning?")
+        # cleaninput = _call_input_cleaning_process("karthick !")
         token1 = Tokenizer()
         token1.load()
-        encode = token1.encode(cleaninput)
+        encode = token1.encode("hi hello ? How Difficult Is Machine Learning ?")
         decode = token1.decode(encode)
         
         print("Encoded:", encode)
@@ -69,7 +69,9 @@ class Tokenizer:
         self.outputDir = "data/output"
         self.special_token =  ["<unk>", "<pad>", "<bos>", "<eos>"]
         os.makedirs(self.outputDir, exist_ok=True)
-
+    ##############################################################
+    #########           Training BPE Token              ##########
+    ##############################################################
     def _get_pair_frequencies(self, corpus):
         pairs = defaultdict(int)
         for word in corpus:
@@ -123,7 +125,11 @@ class Tokenizer:
             f.write("#version: 0.2\n")
             for pair in merges:
                 f.write(f"{pair[0]} {pair[1]}\n")
-
+    
+    ##############################################################
+    #########           Load Tokeniser                  ##########
+    ##############################################################   
+    
     def load(self):
         with open(os.path.join(self.outputDir, "vocab.json"), 'r', encoding='utf-8') as f:
             self.vocab_load = json.load(f)
@@ -183,4 +189,68 @@ class Tokenizer:
                 current_word += token
         if current_word:
             words.append(current_word)
+        # text = ''
+        # for w in words:
+        #     if w in string.punctuation:
+        #         text += ' ' + w + ' '
+        #     else:
+        #         text += w + ' '
         return ' '.join(words)
+
+import re  
+import string
+from collections import defaultdict
+
+contractions_dict = {
+"aren't": "are not", "can't": "cannot", "could've": "could have", "couldn't": "could not", "didn't": "did not", "doesn't": "does not",
+"don't": "do not", "hadn't": "had not", "hasn't": "has not", "haven't": "have not", "he'd": "he had", "he'll": "he will", "he's": "he is",
+"I'd": "I had", "I'll": "I will", "I'm": "I am", "I've": "I have", "isn't": "is not", "it'd": "it had", "it'll": "it will", "it's": "it is",
+"let's": "let us", "might've": "might have", "mightn't": "might not", "must've": "must have", "mustn't": "must not", "shan't": "shall not",
+"she'd": "she had", "she'll": "she will", "she's": "she is", "should've": "should have", "shouldn't": "should not", "that's": "that is",
+"there's": "there is", "they'd": "they had", "they'll": "they will", "they're": "they are", "they've": "they have", "wasn't": "was not",
+"we'd": "we had", "we're": "we are", "we've": "we have", "weren't": "were not", "what's": "what is", "where's": "where is", "who's": "who is",
+"won't": "will not", "would've": "would have", "wouldn't": "would not", "you'd": "you had", "you'll": "you will", "you're": "you are", "you've": "you have"
+        }
+
+class clean_algorithum:
+    def __init__(self):
+        pass
+
+    def processclean(self, texts):
+        #remove HTML
+        texts = re.sub(r'<.*?>', '', texts)  
+        #remove URLS
+        texts = re.sub(r'https?://\S+|www\.\S+', '', texts)
+        #remove emojis and non-ASCII characters
+        texts = texts.encode('ascii', 'ignore').decode()
+        #texts = re.sub(r'[^\x00-\x7F]+', '', texts)      
+        #remove punctuation
+        texts = texts.translate(str.maketrans('', '', string.punctuation))
+        #remove extra spaces
+        texts = re.sub(r'\s+', ' ', texts)       
+        #tokenization base split
+        texts = texts.strip()
+        #remove the numbers
+        texts = re.sub(r'\d+', '', texts)
+        #remove stop words        
+        tokens = self.remove_duplicates(texts)
+        # tokens = [token + "</w>" for token in tokens]      
+        return tokens
+
+    def remove_duplicates(self, tokens):   
+        words = tokens.split()
+        unique_words = []
+        for word in words:
+            if word not in unique_words:
+                unique_words.append(word)
+        return  ' '.join(unique_words)
+    
+    def inputclean(self, text):
+        # Basic cleaning without stop word or contraction handling
+        text = re.sub(r'<.*?>', '', text)
+        text = re.sub(r'https?://\S+|www\.\S+', '', text)
+        text = text.encode('ascii', 'ignore').decode()
+        text = text.translate(str.maketrans('', '', string.punctuation))
+        text = re.sub(r'\d+', '', text)
+        text = re.sub(r'\s+', ' ', text).strip()
+        return text
