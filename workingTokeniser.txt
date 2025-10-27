@@ -1,0 +1,186 @@
+import os
+from token.tokenizer import Tokenizer
+from token.cleanData import clean_algorithum
+
+def main():
+    filepath = 'data/input/userdata.txt'
+    try:       
+
+        # if not getdata:
+        #     print("No data found in file.")
+        #     return
+        getdata = read_file(filepath)        
+        cleandata = _call_cleaning_process(getdata)
+        token = Tokenizer()
+        merges, vocab_tokens = token.train(cleandata)
+        token.save(vocab_tokens, merges)
+
+        #load
+        cleaninput = _call_input_cleaning_process("hi hello How Difficult Is Machine Learning?")
+        token1 = Tokenizer()
+        token1.load()
+        encode = token1.encode(cleaninput)
+        decode = token1.decode(encode)
+        
+        print("Encoded:", encode)
+        print("Decoded:", decode)
+
+
+        # if token.vocab:
+        #     print("Last 10 tokens:", list(token.vocab)[-10:])
+        # else:
+        #     print("No tokens found.")
+    except Exception as e:
+        print(f"Error: {e}")
+
+def read_file(filepath):
+    """Read file content"""
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            return f.read()
+    except FileNotFoundError:
+        print(f"File {filepath} not found.")
+        return ""
+    except Exception as e:
+        print(f"Error reading file: {e}")
+        return ""
+
+def _call_cleaning_process(corpus):
+        cleaner = clean_algorithum()        
+        cleaned_Data = cleaner.processclean(corpus)
+        return [list(word) + ["</w>"] for word in cleaned_Data.split()]
+
+def _call_input_cleaning_process(userinput):
+        cleaner = clean_algorithum()
+        cleaned_Data = cleaner.inputclean(userinput)
+        return cleaned_Data
+
+if __name__ == "__main__":
+    main()
+
+import os
+import string
+import json
+from collections import defaultdict
+
+class Tokenizer:
+    def __init__(self):
+        self.vocab_size = 10000000
+        self.outputDir = "data/output"
+        self.special_token =  ["<unk>", "<pad>", "<bos>", "<eos>"]
+        os.makedirs(self.outputDir, exist_ok=True)
+
+    def _get_pair_frequencies(self, corpus):
+        pairs = defaultdict(int)
+        for word in corpus:
+            for i in range(len(word) - 1):
+                pairs[(word[i], word[i + 1])] += 1
+        return pairs
+    
+    def _merge_pair(self, pair, corpus):
+        merged_corpus = []
+        bigram = ''.join(pair)
+        for word in corpus:
+            new_word = []
+            i = 0
+            while i < len(word):
+                if i < len(word) - 1 and (word[i], word[i + 1]) == pair:
+                    new_word.append(bigram)
+                    i += 2
+                else:
+                    new_word.append(word[i])
+                    i += 1
+            merged_corpus.append(new_word)
+        return merged_corpus
+    
+    def train(self, corpus):               
+        merges = []
+        token_set = set()
+
+        while len(token_set) < self.vocab_size:
+            pair_freqs = self._get_pair_frequencies(corpus)
+            if not pair_freqs:
+                break
+            most_frequent = max(pair_freqs, key=pair_freqs.get)
+            merges.append(most_frequent)
+            corpus = self._merge_pair(most_frequent, corpus)
+            token_set.update([item for word in corpus for item in word])
+
+        return merges, token_set
+
+    def save(self, tokens, merges):             
+        # Add special characters from string.punctuation
+        special_chars = list(string.punctuation)        
+        # Combine all tokens
+        full_vocab = self.special_token + special_chars + sorted(tokens)
+        # Create vocab dictionary
+        vocab_dict = {token: idx for idx, token in enumerate(full_vocab)}
+        # Save to file
+        with open(os.path.join(self.outputDir, "vocab.json"), "w", encoding="utf-8") as f:
+            json.dump(vocab_dict, f, indent=2)
+
+        with open(os.path.join(self.outputDir, "merges.txt"), "w", encoding="utf-8") as f:
+            f.write("#version: 0.2\n")
+            for pair in merges:
+                f.write(f"{pair[0]} {pair[1]}\n")
+
+    def load(self):
+        with open(os.path.join(self.outputDir, "vocab.json"), 'r', encoding='utf-8') as f:
+            self.vocab_load = json.load(f)
+        with open(os.path.join(self.outputDir, "merges.txt"), 'r', encoding='utf-8') as f:
+            lines = f.read().splitlines()[1:]  # skip "#version" line
+            self.merges_load = [tuple(line.strip().split()) for line in lines]
+
+        self.bpe_ranks = {pair: i for i, pair in enumerate(self.merges_load)}
+        self.token_to_id = self.vocab_load
+        self.id_to_token = {v: k for k, v in self.vocab_load.items()}
+
+    def _get_initial_tokens(self, word):
+        return list(word) + ['</w>']
+    
+    def _apply_merges(self, tokens):
+        while True:
+            pairs = [(tokens[i], tokens[i + 1]) for i in range(len(tokens) - 1)]
+            ranked = [(pair, self.bpe_ranks.get(pair, float('inf'))) for pair in pairs]
+            if not ranked:
+                break
+            best_pair, rank = min(ranked, key=lambda x: x[1])
+            if rank == float('inf'):
+                break
+
+            new_tokens = []
+            i = 0
+            while i < len(tokens):
+                if i < len(tokens) - 1 and (tokens[i], tokens[i + 1]) == best_pair:
+                    new_tokens.append(''.join(best_pair))
+                    i += 2
+                else:
+                    new_tokens.append(tokens[i])
+                    i += 1
+            tokens = new_tokens
+        return tokens
+
+    def encode(self, text):
+        token_ids = []
+        for word in text.strip().split():
+            chars = self._get_initial_tokens(word)
+            bpe_tokens = self._apply_merges(chars)
+            for token in bpe_tokens:
+                token_id = self.token_to_id.get(token, self.token_to_id.get("<unk>", -1))
+                token_ids.append(token_id)
+        return token_ids
+    
+    def decode(self, token_ids):
+        tokens = [self.id_to_token[token_id] for token_id in token_ids if token_id in self.id_to_token]
+        words = []
+        current_word = ''
+        for token in tokens:
+            if token.endswith('</w>'):
+                current_word += token[:-4]
+                words.append(current_word)
+                current_word = ''
+            else:
+                current_word += token
+        if current_word:
+            words.append(current_word)
+        return ' '.join(words)
