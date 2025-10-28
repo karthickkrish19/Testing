@@ -1,7 +1,7 @@
 import os
 from token.tokenizer import Tokenizer
 from token.cleanData import clean_algorithum
-from embed.embedding import EmbeddingLayer
+from embed.embedding import Embedding
 
 def main():
     filepath = 'data/input/userdata.txt'
@@ -15,7 +15,7 @@ def main():
             _call_training_process(filepath)
 
         #Step 1: Load Tokenizer
-        userinput = "karthick @@"
+        userinput = "How Difficult Is Machine Learning"
         encode, decode, unknown_words = _call_token_process(userinput)
         print("Encoded:", encode)
         print("Decoded:", decode)
@@ -25,27 +25,15 @@ def main():
 
         #step 2: Embedding   
         
-        vocab_path = "data/output/vocab.json"
-        embedding_layer = EmbeddingLayer(vocab_path, embedding_dim=512)
+        embedding_layer = Embedding("data/output/vocab.json", embedding_dim=768)
+        token_ids = encode
+        input_vectors = embedding_layer.input_embeddings(token_ids)
 
-        # Example token IDs
-        token_ids = [0, 1, 2, 3]  # Replace with actual encoded tokens
-
-        combined_vectors = embedding_layer.embed_with_position(token_ids, embedding_layer)
-
-        print("Combined Embeddings with Positional Encoding (first 2):")
-        for vec in combined_vectors[:2]:
-            print(vec)  # Print first 2 vectors for brevity
+        print("Input Embeddings (first 2):")
+        for vec in input_vectors[:2]:
+            print(vec)
 
         embedding_layer.save("data/output/embedding.json")
-     
-        # embedding_layer = EmbeddingLayer("data/output/vocab.json", embedding_dim=512)
-        # embedded_vectors = embedding_layer.embed(encode)
-
-        # print("Token IDs:", encode)
-        # print("Embedded Vectors (first 2):", embedded_vectors[:2])
-
-        # embedding_layer.save("data/output/embedding.json")
 
 
     except Exception as e:
@@ -107,42 +95,38 @@ def _call_retraining_process(unknown_words, filepath):
 
 if __name__ == "__main__":
     main()
-
 import json
-import math
 import random
+import math
 
-class EmbeddingLayer:    
-    def __init__(self, vocab_path, embedding_dim=512):
+# ------------------ Embedding Layer ------------------ #
+class Embedding:
+    def __init__(self, vocab_path="data/output/vocab.json", embedding_dim=768):
         self.embedding_dim = embedding_dim
         self.vocab = self._load_vocab(vocab_path)
         self.vocab_size = len(self.vocab)
-        self.embedding_matrix = self._initialize_embeddings()
+        self.token_to_id = self.vocab
+        self.embedding_matrix = self._init_embeddings()
 
-    
-    def _load_vocab(self, vocab_path):
-        with open(vocab_path, 'r', encoding='utf-8') as f:
+    def _load_vocab(self, path):
+        with open(path, 'r', encoding='utf-8') as f:
             return json.load(f)
 
-    def _initialize_embeddings(self):
-        embedding_matrix = {}
-        for token_id in range(self.vocab_size):
-            embedding_matrix[token_id] = [random.uniform(-0.1, 0.1) for _ in range(self.embedding_dim)]
-        return embedding_matrix
+    def _init_embeddings(self):
+        matrix = {}
+        for token, token_id in self.vocab.items():
+            matrix[token_id] = [random.uniform(-0.1, 0.1) for _ in range(self.embedding_dim)]
+        return matrix
 
-    def embed(self, token_ids):
-        return [self.embedding_matrix[token_id] for token_id in token_ids if token_id in self.embedding_matrix]
+    def embed_tokens(self, token_ids):
+        return [self.embedding_matrix.get(token_id, [0.0] * self.embedding_dim) for token_id in token_ids]
 
-    def save(self, path):
+    def save(self, path="data/output/embedding.json"):
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(self.embedding_matrix, f)
 
-    def load(self, path):
-        with open(path, 'r', encoding='utf-8') as f:
-            self.embedding_matrix = json.load(f)
-
-    # ------------------ Positional Encoding ------------------ #
-    def positional_encoding(seq_len, dim):
+# ------------------ Positional Encoding ------------------ #
+    def positional_encoding(self, seq_len, dim):
         pe = []
         for pos in range(seq_len):
             row = []
@@ -153,15 +137,14 @@ class EmbeddingLayer:
             pe.append(row)
         return pe
 
-    # ------------------ Combined Embedding + Position ------------------ #
-    def embed_with_position(token_ids, embedding_layer):
-        embeddings = embedding_layer.embed(token_ids)
-        positions = EmbeddingLayer.positional_encoding(len(token_ids), embedding_layer.embedding_dim)
+# ------------------ Combine Token + Positional Embeddings ------------------ #
+    def input_embeddings(self, token_ids):
+        token_embeddings = self.embed_tokens(token_ids)
+        position_embeddings = self.positional_encoding(len(token_ids), self.embedding_dim)
         combined = []
-        for emb, pos in zip(embeddings, positions):
-            combined.append([e + p for e, p in zip(emb, pos)])
+        for token_vec, pos_vec in zip(token_embeddings, position_embeddings):
+            combined.append([t + p for t, p in zip(token_vec, pos_vec)])
         return combined
-
 
 
 import re  
@@ -221,3 +204,155 @@ class clean_algorithum:
         text = re.sub(r'\d+', '', text)
         text = re.sub(r'\s+', ' ', text).strip()
         return text
+
+import os
+import string
+import json
+from collections import defaultdict
+
+class Tokenizer:
+    def __init__(self):
+        self.vocab_size = 10000000
+        self.outputDir = "data/output"
+        self.special_token =  ["<unk>", "<pad>", "<bos>", "<eos>"]
+        os.makedirs(self.outputDir, exist_ok=True)
+    ##############################################################
+    #########           Training BPE Token              ##########
+    ##############################################################
+    def _get_pair_frequencies(self, corpus):
+        pairs = defaultdict(int)
+        for word in corpus:
+            for i in range(len(word) - 1):
+                pairs[(word[i], word[i + 1])] += 1
+        return pairs
+    
+    def _merge_pair(self, pair, corpus):
+        merged_corpus = []
+        bigram = ''.join(pair)
+        for word in corpus:
+            new_word = []
+            i = 0
+            while i < len(word):
+                if i < len(word) - 1 and (word[i], word[i + 1]) == pair:
+                    new_word.append(bigram)
+                    i += 2
+                else:
+                    new_word.append(word[i])
+                    i += 1
+            merged_corpus.append(new_word)
+        return merged_corpus
+    
+    def train(self, corpus):               
+        merges = []
+        token_set = set()
+
+        while len(token_set) < self.vocab_size:
+            pair_freqs = self._get_pair_frequencies(corpus)
+            if not pair_freqs:
+                break
+            most_frequent = max(pair_freqs, key=pair_freqs.get)
+            merges.append(most_frequent)
+            corpus = self._merge_pair(most_frequent, corpus)
+            token_set.update([item for word in corpus for item in word])
+
+        return merges, token_set
+
+    def save(self, tokens, merges):             
+        # Add special characters from string.punctuation
+        special_chars = list(string.punctuation)        
+        # Combine all tokens
+        full_vocab = self.special_token + special_chars + sorted(tokens)
+        # Create vocab dictionary
+        vocab_dict = {token: idx for idx, token in enumerate(full_vocab)}
+        # Save to file
+        with open(os.path.join(self.outputDir, "vocab.json"), "w", encoding="utf-8") as f:
+            json.dump(vocab_dict, f, indent=2)
+
+        with open(os.path.join(self.outputDir, "merges.txt"), "w", encoding="utf-8") as f:
+            f.write("#version: 0.2\n")
+            for pair in merges:
+                f.write(f"{pair[0]} {pair[1]}\n")
+    
+    ##############################################################
+    #########           Load Tokeniser                  ##########
+    ##############################################################   
+    
+    def load(self):
+        with open(os.path.join(self.outputDir, "vocab.json"), 'r', encoding='utf-8') as f:
+            self.vocab_load = json.load(f)
+        with open(os.path.join(self.outputDir, "merges.txt"), 'r', encoding='utf-8') as f:
+            lines = f.read().splitlines()[1:]  # skip "#version" line
+            self.merges_load = [tuple(line.strip().split()) for line in lines]
+
+        self.bpe_ranks = {pair: i for i, pair in enumerate(self.merges_load)}
+        self.token_to_id = self.vocab_load
+        self.id_to_token = {v: k for k, v in self.vocab_load.items()}
+
+    def _get_initial_tokens(self, word):
+        return list(word) + ['</w>']
+    
+    def _apply_merges(self, tokens):
+        while True:
+            pairs = [(tokens[i], tokens[i + 1]) for i in range(len(tokens) - 1)]
+            ranked = [(pair, self.bpe_ranks.get(pair, float('inf'))) for pair in pairs]
+            if not ranked:
+                break
+            best_pair, rank = min(ranked, key=lambda x: x[1])
+            if rank == float('inf'):
+                break
+
+            new_tokens = []
+            i = 0
+            while i < len(tokens):
+                if i < len(tokens) - 1 and (tokens[i], tokens[i + 1]) == best_pair:
+                    new_tokens.append(''.join(best_pair))
+                    i += 2
+                else:
+                    new_tokens.append(tokens[i])
+                    i += 1
+            tokens = new_tokens
+        return tokens
+
+    def encode(self, text):
+        token_ids = []
+        unknown_words = []
+        for word in text.strip().split():
+            chars = self._get_initial_tokens(word)
+            bpe_tokens = self._apply_merges(chars)
+            word_unknown = False
+            
+            for token in bpe_tokens:
+                token_id = self.token_to_id.get(token)
+                if token_id is None:
+                    word_unknown = True
+                    token_id = self.token_to_id.get("<unk>")
+                token_ids.append(token_id)
+
+            if word_unknown:
+                unknown_words.append(word)
+        return token_ids, unknown_words
+            # for token in bpe_tokens:
+            #     token_id = self.token_to_id.get(token, self.token_to_id.get("<unk>", -1))
+            #     token_ids.append(token_id)
+            # return token_ids
+    
+    def decode(self, token_ids):
+        tokens = [self.id_to_token[token_id] for token_id in token_ids if token_id in self.id_to_token]
+        words = []
+        current_word = ''
+        for token in tokens:
+            if token.endswith('</w>'):
+                current_word += token[:-4]
+                words.append(current_word)
+                current_word = ''
+            else:
+                current_word += token
+        if current_word:
+            words.append(current_word)
+        # text = ''
+        # for w in words:
+        #     if w in string.punctuation:
+        #         text += ' ' + w + ' '
+        #     else:
+        #         text += w + ' '
+        return ' '.join(words)
