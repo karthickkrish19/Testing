@@ -285,3 +285,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+show ouput :
+user input: How Difficult Is Machine Learning
+Token IDs: [356, 221, 397, 467, 441]
+First token embedding (first 8 dims): [0.06158262155795394, 1.085393416695885, 0.08010427479189586, 0.9110707087507366, -0.057398007211710136, 1.0142543067440468, 0.040443016225096634, 1.020879472683541]
