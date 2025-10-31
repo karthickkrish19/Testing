@@ -233,8 +233,8 @@ class EmbeddingLayer:
 
 
 # -------------------- Example flow usage -------------------- #
-def example_flow():
-    input_file = "data/input/corpus.txt"
+def main():
+    input_file = "data/input/userdata.txt"
     output_dir = "data/output"
     vocab_path = os.path.join(output_dir, "vocab.json")
 
@@ -260,10 +260,11 @@ def example_flow():
 
     # 3) Load tokenizer, encode new input
     tokenizer.load()
-    text = "This is a new test sentence"
+    text = "How Difficult Is Machine Learning"
+    print("user input:", text)
     ids, unknown = tokenizer.encode(text)
     print("Token IDs:", ids)
-    print("Unknown words:", unknown)
+    # print("Unknown words:", unknown)
 
     # 4) If unknown words found, you may retrain tokenizer & embeddings
     if unknown:
@@ -283,4 +284,4 @@ def example_flow():
 
 
 if __name__ == "__main__":
-    example_flow()
+    main()
