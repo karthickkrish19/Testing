@@ -1,0 +1,286 @@
+import os
+import re
+import json
+import math
+import random
+import string
+from collections import defaultdict
+
+
+# ===============================
+#  Text Cleaner
+# ===============================
+class Cleaner:
+    def clean(self, text: str) -> str:
+        text = re.sub(r'<.*?>', '', text)
+        text = re.sub(r'https?://\S+|www\.\S+', '', text)
+        text = text.encode('ascii', 'ignore').decode('ascii')
+        text = text.translate(str.maketrans('', '', string.punctuation))
+        text = re.sub(r'\d+', '', text)
+        text = re.sub(r'\s+', ' ', text).strip()
+        return text.lower()
+
+
+# ===============================
+#  Tokenizer (Simple BPE-like)
+# ===============================
+class Tokenizer:
+    def __init__(self, output_dir="data/output", vocab_size=2000):
+        self.output_dir = output_dir
+        os.makedirs(self.output_dir, exist_ok=True)
+        self.vocab_size = vocab_size
+        self.special_tokens = ["<unk>", "<pad>", "<bos>", "<eos>"]
+        self.vocab = {}
+        self.id_to_token = {}
+
+    def train(self, text):
+        words = text.split()
+        tokens = list(set(words))
+        tokens = self.special_tokens + tokens[: self.vocab_size - len(self.special_tokens)]
+        self.vocab = {tok: i for i, tok in enumerate(tokens)}
+        self.id_to_token = {i: tok for tok, i in self.vocab.items()}
+
+    def encode(self, text):
+        words = text.split()
+        token_ids = [self.vocab.get(w, self.vocab["<unk>"]) for w in words]
+        return [self.vocab["<bos>"]] + token_ids + [self.vocab["<eos>"]]
+
+    def decode(self, token_ids):
+        tokens = [self.id_to_token.get(i, "<unk>") for i in token_ids]
+        text = " ".join([t for t in tokens if t not in self.special_tokens])
+        return text.strip()
+
+    def save(self):
+        with open(os.path.join(self.output_dir, "vocab.json"), "w", encoding="utf-8") as f:
+            json.dump(self.vocab, f, indent=2)
+
+    def load(self):
+        path = os.path.join(self.output_dir, "vocab.json")
+        with open(path, "r", encoding="utf-8") as f:
+            self.vocab = json.load(f)
+        self.id_to_token = {int(v): k for k, v in self.vocab.items()}
+
+
+# ===============================
+#  Embedding Layer
+# ===============================
+class EmbeddingLayer:
+    def __init__(self, vocab, embedding_dim=64):
+        self.embedding_dim = embedding_dim
+        self.vocab = vocab
+        self.embedding_matrix = {
+            i: [random.uniform(-0.1, 0.1) for _ in range(embedding_dim)] for i in vocab.values()
+        }
+
+    def embed_tokens(self, token_ids):
+        return [self.embedding_matrix.get(tid, [0.0] * self.embedding_dim) for tid in token_ids]
+
+    def positional_encoding(self, seq_len):
+        pe = []
+        for pos in range(seq_len):
+            row = []
+            for i in range(self.embedding_dim):
+                angle = pos / (10000 ** ((2 * (i // 2)) / self.embedding_dim))
+                row.append(math.sin(angle) if i % 2 == 0 else math.cos(angle))
+            pe.append(row)
+        return pe
+
+    def input_embeddings(self, token_ids):
+        tok_emb = self.embed_tokens(token_ids)
+        pos_emb = self.positional_encoding(len(token_ids))
+        return [[t + p for t, p in zip(tok, pos)] for tok, pos in zip(tok_emb, pos_emb)]
+
+
+# ===============================
+#  Transformer Components
+# ===============================
+def softmax(x):
+    max_x = max(x)
+    exps = [math.exp(i - max_x) for i in x]
+    s = sum(exps)
+    return [e / s for e in exps]
+
+
+def layer_norm(x, eps=1e-6):
+    mean = sum(x) / len(x)
+    var = sum((xi - mean) ** 2 for xi in x) / len(x)
+    return [(xi - mean) / math.sqrt(var + eps) for xi in x]
+
+
+def relu(x):
+    return [max(0, xi) for xi in x]
+
+
+def dropout(x, rate=0.1):
+    return [0 if random.random() < rate else xi for xi in x]
+
+
+def matmul(A, B):
+    return [[sum(A[i][k] * B[k][j] for k in range(len(B))) for j in range(len(B[0]))] for i in range(len(A))]
+
+
+class MultiHeadSelfAttention:
+    def __init__(self, embed_dim, num_heads):
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.head_dim = embed_dim // num_heads
+        self.Wq = [[random.uniform(-0.1, 0.1) for _ in range(embed_dim)] for _ in range(embed_dim)]
+        self.Wk = [[random.uniform(-0.1, 0.1) for _ in range(embed_dim)] for _ in range(embed_dim)]
+        self.Wv = [[random.uniform(-0.1, 0.1) for _ in range(embed_dim)] for _ in range(embed_dim)]
+        self.Wo = [[random.uniform(-0.1, 0.1) for _ in range(embed_dim)] for _ in range(embed_dim)]
+
+    def split_heads(self, x):
+        seq_len = len(x)
+        heads = []
+        for h in range(self.num_heads):
+            head = []
+            for t in range(seq_len):
+                start = h * self.head_dim
+                end = start + self.head_dim
+                head.append(x[t][start:end])
+            heads.append(head)
+        return heads
+
+    def combine_heads(self, heads):
+        seq_len = len(heads[0])
+        combined = []
+        for t in range(seq_len):
+            combined_t = []
+            for h in range(len(heads)):
+                combined_t.extend(heads[h][t])
+            combined.append(combined_t)
+        return combined
+
+    def scaled_dot_product_attention(self, Q, K, V):
+        seq_len = len(Q)
+        scale = 1 / math.sqrt(len(Q[0]))
+        scores = [[sum(Q[i][k] * K[j][k] for k in range(len(Q[0]))) * scale for j in range(seq_len)] for i in range(seq_len)]
+        attn_weights = [softmax(s) for s in scores]
+        output = []
+        for i in range(seq_len):
+            out_i = [0] * len(V[0])
+            for j in range(seq_len):
+                for k in range(len(V[0])):
+                    out_i[k] += attn_weights[i][j] * V[j][k]
+            output.append(out_i)
+        return output
+
+    def forward(self, x):
+        Q = matmul(x, self.Wq)
+        K = matmul(x, self.Wk)
+        V = matmul(x, self.Wv)
+        Q_heads = self.split_heads(Q)
+        K_heads = self.split_heads(K)
+        V_heads = self.split_heads(V)
+        attn_outputs = [self.scaled_dot_product_attention(Q_heads[h], K_heads[h], V_heads[h]) for h in range(self.num_heads)]
+        combined = self.combine_heads(attn_outputs)
+        return matmul(combined, self.Wo)
+
+
+class PositionwiseFeedForward:
+    def __init__(self, embed_dim, ff_dim):
+        self.W1 = [[random.uniform(-0.1, 0.1) for _ in range(embed_dim)] for _ in range(ff_dim)]
+        self.b1 = [0.0] * ff_dim
+        self.W2 = [[random.uniform(-0.1, 0.1) for _ in range(ff_dim)] for _ in range(embed_dim)]
+        self.b2 = [0.0] * embed_dim
+
+    def forward(self, x):
+        hidden = []
+        for vec in x:
+            h = [sum(vec[i] * self.W1[j][i] for i in range(len(vec))) + self.b1[j] for j in range(len(self.W1))]
+            h = relu(h)
+            hidden.append(h)
+        output = []
+        for h in hidden:
+            o = [sum(h[i] * self.W2[j][i] for i in range(len(h))) + self.b2[j] for j in range(len(self.W2))]
+            output.append(o)
+        return output
+
+
+class TransformerEncoderLayer:
+    def __init__(self, embed_dim, num_heads, ff_dim):
+        self.self_attn = MultiHeadSelfAttention(embed_dim, num_heads)
+        self.ffn = PositionwiseFeedForward(embed_dim, ff_dim)
+
+    def forward(self, x):
+        attn_out = self.self_attn.forward([layer_norm(v) for v in x])
+        x = [[x[i][j] + attn_out[i][j] for j in range(len(x[i]))] for i in range(len(x))]
+        ffn_out = self.ffn.forward([layer_norm(v) for v in x])
+        x = [[x[i][j] + ffn_out[i][j] for j in range(len(x[i]))] for i in range(len(x))]
+        return x
+
+
+class TransformerEncoder:
+    def __init__(self, num_layers, embed_dim, num_heads, ff_dim):
+        self.layers = [TransformerEncoderLayer(embed_dim, num_heads, ff_dim) for _ in range(num_layers)]
+
+    def forward(self, x):
+        for layer in self.layers:
+            x = layer.forward(x)
+        return x
+
+
+class OutputProjection:
+    def __init__(self, embed_dim, vocab_size):
+        self.weights = [[random.uniform(-0.1, 0.1) for _ in range(embed_dim)] for _ in range(vocab_size)]
+        self.biases = [0.0] * vocab_size
+
+    def project(self, vec):
+        logits = [
+            sum(vec[i] * self.weights[j][i] for i in range(len(vec))) + self.biases[j]
+            for j in range(len(self.weights))
+        ]
+        return logits
+
+    def predict(self, vec):
+        logits = self.project(vec)
+        return softmax(logits).index(max(softmax(logits)))
+
+
+# ===============================
+#  Greedy Decode (fixed)
+# ===============================
+def greedy_decode(transformer, emb_layer, tokenizer, proj, prompt, max_length=20):
+    token_ids = tokenizer.encode(prompt)
+
+    for _ in range(max_length):
+        embeddings = emb_layer.input_embeddings(token_ids)
+        out = transformer.forward(embeddings)
+        next_id = proj.predict(out[-1])
+        token_ids.append(next_id)
+        if next_id == tokenizer.vocab["<eos>"]:
+            break
+    return tokenizer.decode(token_ids)
+
+
+# ===============================
+#  Main Script
+# ===============================
+def main():
+    os.makedirs("data/input", exist_ok=True)
+    os.makedirs("data/output", exist_ok=True)
+
+    input_file = "data/input/userdata.txt"
+    if not os.path.exists(input_file):
+        with open(input_file, "w") as f:
+            f.write("machine learning is a field of artificial intelligence that focuses on data and algorithms")
+
+    with open(input_file, "r", encoding="utf-8") as f:
+        raw = f.read()
+
+    cleaned = Cleaner().clean(raw)
+    tokenizer = Tokenizer()
+    tokenizer.train(cleaned)
+    tokenizer.save()
+
+    emb_layer = EmbeddingLayer(tokenizer.vocab, embedding_dim=64)
+    transformer = TransformerEncoder(num_layers=2, embed_dim=64, num_heads=8, ff_dim=128)
+    proj = OutputProjection(embed_dim=64, vocab_size=len(tokenizer.vocab))
+
+    prompt = "machine learning"
+    result = greedy_decode(transformer, emb_layer, tokenizer, proj, prompt)
+    print("\nGenerated text:\n", result)
+
+
+if __name__ == "__main__":
+    main()
