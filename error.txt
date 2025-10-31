@@ -1,23 +1,126 @@
-Training tokenizer...
-Traceback (most recent call last):
-  File "C:\Users\kgnanas6\Karthick\AI_Learning\rag_llm\main.py", line 47, in <module>
-    main()
-  File "C:\Users\kgnanas6\Karthick\AI_Learning\rag_llm\main.py", line 42, in main
-    generated = greedy_decode(transformer, emb_layer, tokenizer, prompt, max_length=20)
-                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\kgnanas6\Karthick\AI_Learning\rag_llm\utils\generation.py", line 9, in greedy_decode
-    transformer_out = transformer_encoder.forward(embeddings)
-                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\kgnanas6\Karthick\AI_Learning\rag_llm\core\transformer.py", line 156, in forward
-    x = layer.forward(x)
-        ^^^^^^^^^^^^^^^^
-  File "C:\Users\kgnanas6\Karthick\AI_Learning\rag_llm\core\transformer.py", line 145, in forward
-    ffn_output = self.ffn.forward(normed)
-                 ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\kgnanas6\Karthick\AI_Learning\rag_llm\core\transformer.py", line 124, in forward
-    h = [sum(vec[i] * self.W1[j][i] for i in range(len(vec))) + self.b1[j] for j in range(len(self.W1))]
-         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\kgnanas6\Karthick\AI_Learning\rag_llm\core\transformer.py", line 124, in <genexpr>
-    h = [sum(vec[i] * self.W1[j][i] for i in range(len(vec))) + self.b1[j] for j in range(len(self.W1))]
-                      ~~~~~~~~~~^^^
-IndexError: list index out of range
+Tokenizer loaded.
+Embedding shape: 5 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 6 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 7 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 8 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 9 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 10 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 11 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 12 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 13 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 14 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 15 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 16 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 17 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 18 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 19 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 20 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 21 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 22 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 23 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 24 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Generated text: How Difficult Is Machine Learning desinecessparticunlabeled effectively vectors areas shot Relatian ansplit Terms transmachinelearning alyBiographical valu
+
+(venv) C:\Users\kgnanas6\Karthick\AI_Learning\rag_llm>python main.py
+Tokenizer loaded.
+Embedding shape: 5 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 6 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 7 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 8 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 9 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 10 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 11 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 12 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 13 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 14 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 15 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 16 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 17 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 18 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 19 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 20 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 21 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 22 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 23 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Embedding shape: 24 x 64
+Passing through Transformer layer 0
+Passing through Transformer layer 1
+Generated text: How Difficult Is Machine Learning automatint uring past accepstagesproduces hierr CorSigmomagnitdimenANGini certain machtellLism
