@@ -1,0 +1,517 @@
+"""
+==========================================================
+Pure-Python Mini GPT (Educational Transformer Implementation)
+----------------------------------------------------------
+Author : ChatGPT
+Description : A professional, fully self-contained GPT-like
+              language model written in pure Python, without
+              NumPy, PyTorch, or TensorFlow.
+==========================================================
+"""
+
+import math
+import random
+import re
+import string
+from collections import defaultdict
+
+# ==========================================================
+# 1. TEXT CLEANER
+# ==========================================================
+class Cleaner:
+    """Basic text preprocessor for removing noise from raw text."""
+
+    def clean(self, text: str) -> str:
+        """Remove HTML, punctuation, URLs, digits, and normalize spaces."""
+        text = re.sub(r"<.*?>", "", text)
+        text = re.sub(r"https?://\S+|www\.\S+", "", text)
+        text = text.encode("ascii", "ignore").decode("ascii")
+        text = text.translate(str.maketrans("", "", string.punctuation))
+        text = re.sub(r"\d+", "", text)
+        text = re.sub(r"\s+", " ", text).strip().lower()
+        return text
+
+
+# ==========================================================
+# 2. SIMPLE BYTE-PAIR ENCODER TOKENIZER
+# ==========================================================
+class Tokenizer:
+    """Lightweight Byte Pair Encoding (BPE) tokenizer."""
+
+    def __init__(self, vocab_size: int = 500, special_tokens=None):
+        self.vocab_size = vocab_size
+        self.special_tokens = special_tokens or ["<unk>", "<pad>", "<bos>", "<eos>"]
+        self.vocab = {}
+        self.id_to_token = {}
+        self.merges = []
+        self.bpe_ranks = {}
+
+    def _get_pair_frequencies(self, corpus):
+        pairs = defaultdict(int)
+        for word in corpus:
+            for i in range(len(word) - 1):
+                pairs[(word[i], word[i + 1])] += 1
+        return pairs
+
+    def _merge_pair(self, pair, corpus):
+        merged_corpus = []
+        bigram = "".join(pair)
+        for word in corpus:
+            new_word, i = [], 0
+            while i < len(word):
+                if i < len(word) - 1 and (word[i], word[i + 1]) == pair:
+                    new_word.append(bigram)
+                    i += 2
+                else:
+                    new_word.append(word[i])
+                    i += 1
+            merged_corpus.append(new_word)
+        return merged_corpus
+
+    def train(self, text: str):
+        """Train BPE merges on provided text."""
+        corpus = [[ch for ch in word] + ["</w>"] for word in text.split()]
+        vocab = set(ch for word in corpus for ch in word)
+
+        while len(vocab) < self.vocab_size:
+            pairs = self._get_pair_frequencies(corpus)
+            if not pairs:
+                break
+            best = max(pairs, key=pairs.get)
+            corpus = self._merge_pair(best, corpus)
+            vocab = set(ch for word in corpus for ch in word)
+            self.merges.append(best)
+            if len(vocab) >= self.vocab_size:
+                break
+
+        vocab = self.special_tokens + sorted(vocab)
+        self.vocab = {tok: i for i, tok in enumerate(vocab)}
+        self.id_to_token = {i: tok for tok, i in self.vocab.items()}
+        self.bpe_ranks = {pair: i for i, pair in enumerate(self.merges)}
+
+    def _apply_merges(self, word):
+        tokens = list(word) + ["</w>"]
+        while True:
+            pairs = [(tokens[i], tokens[i + 1]) for i in range(len(tokens) - 1)]
+            ranked = [(pair, self.bpe_ranks.get(pair, 1e9)) for pair in pairs]
+            best, rank = min(ranked, key=lambda x: x[1])
+            if rank == 1e9:
+                break
+            merged, i = [], 0
+            while i < len(tokens):
+                if i < len(tokens) - 1 and (tokens[i], tokens[i + 1]) == best:
+                    merged.append("".join(best))
+                    i += 2
+                else:
+                    merged.append(tokens[i])
+                    i += 1
+            tokens = merged
+        return tokens
+
+    def encode(self, text: str):
+        """Convert text to list of token IDs."""
+        token_ids = []
+        for word in text.strip().split():
+            for t in self._apply_merges(word):
+                token_ids.append(self.vocab.get(t, 0))
+        token_ids.append(self.vocab["<eos>"])
+        return token_ids
+
+    def decode(self, ids):
+        """Convert token IDs back to text."""
+        tokens = [self.id_to_token.get(i, "<unk>") for i in ids]
+        words, cur = [], ""
+        for tok in tokens:
+            if tok.endswith("</w>"):
+                cur += tok[:-4]
+                words.append(cur)
+                cur = ""
+            elif tok == "<eos>":
+                break
+            else:
+                cur += tok
+        return " ".join(words)
+
+
+# ==========================================================
+# 3. EMBEDDINGS & POSITIONAL ENCODING
+# ==========================================================
+class EmbeddingLayer:
+    """Simple token embedding layer."""
+
+    def __init__(self, vocab_size, dim):
+        self.embeddings = [
+            [random.uniform(-0.1, 0.1) for _ in range(dim)] for _ in range(vocab_size)
+        ]
+
+    def lookup(self, ids):
+        return [self.embeddings[i] for i in ids]
+
+
+class PositionalEncoding:
+    """Sinusoidal positional encoding (as in original Transformer paper)."""
+
+    def __init__(self, max_len, dim):
+        self.encoding = [
+            [
+                math.sin(pos / (10000 ** (2 * (i // 2) / dim))) if i % 2 == 0 else
+                math.cos(pos / (10000 ** (2 * (i // 2) / dim)))
+                for i in range(dim)
+            ]
+            for pos in range(max_len)
+        ]
+
+    def add(self, token_vectors):
+        """Add positional encodings to token embeddings."""
+        return [
+            [token_vectors[i][j] + self.encoding[i][j] for j in range(len(token_vectors[i]))]
+            for i in range(len(token_vectors))
+        ]
+
+
+# ==========================================================
+# 4. MATRIX UTILITIES
+# ==========================================================
+def matmul(A, B):
+    return [[sum(a * b for a, b in zip(row, col)) for col in zip(*B)] for row in A]
+
+def transpose(M):
+    return list(map(list, zip(*M)))
+
+def add(A, B):
+    return [[a + b for a, b in zip(ra, rb)] for ra, rb in zip(A, B)]
+
+def relu(X):
+    return [[max(0, x) for x in row] for row in X]
+
+def layer_norm(X):
+    out = []
+    for row in X:
+        mean = sum(row) / len(row)
+        var = sum((x - mean) ** 2 for x in row) / len(row)
+        out.append([(x - mean) / math.sqrt(var + 1e-6) for x in row])
+    return out
+
+
+# ==========================================================
+# 5. MULTI-HEAD ATTENTION
+# ==========================================================
+def scaled_dot_attention(Q, K, V, causal=True):
+    dk = len(K[0])
+    scores = matmul(Q, transpose(K))
+    scores = [[s / math.sqrt(dk) for s in row] for row in scores]
+
+    if causal:
+        for i in range(len(scores)):
+            for j in range(len(scores[i])):
+                if j > i:
+                    scores[i][j] = -1e9
+
+    softmaxed = []
+    for row in scores:
+        exp_r = [math.exp(x) for x in row]
+        s = sum(exp_r)
+        softmaxed.append([x / s for x in exp_r])
+
+    return matmul(softmaxed, V)
+
+
+class MultiHeadAttention:
+    """Multi-head self-attention mechanism."""
+
+    def __init__(self, dim, heads):
+        self.dim = dim
+        self.heads = heads
+        self.head_dim = dim // heads
+        def randmat(): return [[random.uniform(-0.1, 0.1) for _ in range(dim)] for _ in range(dim)]
+        self.Wq, self.Wk, self.Wv, self.Wo = randmat(), randmat(), randmat(), randmat()
+
+    def _split(self, X):
+        return [[row[i * self.head_dim:(i + 1) * self.head_dim] for row in X] for i in range(self.heads)]
+
+    def forward(self, X):
+        Q, K, V = matmul(X, self.Wq), matmul(X, self.Wk), matmul(X, self.Wv)
+        Qh, Kh, Vh = self._split(Q), self._split(K), self._split(V)
+        heads = [scaled_dot_attention(Qh[i], Kh[i], Vh[i]) for i in range(self.heads)]
+        merged = [sum(p, []) for p in zip(*heads)]
+        return matmul(merged, self.Wo)
+
+
+# ==========================================================
+# 6. TRANSFORMER BLOCK
+# ==========================================================
+class TransformerBlock:
+    """Single Transformer encoder block."""
+
+    def __init__(self, dim, heads, ff_dim):
+        self.attn = MultiHeadAttention(dim, heads)
+        self.W1 = [[random.uniform(-0.1, 0.1) for _ in range(dim)] for _ in range(ff_dim)]
+        self.W2 = [[random.uniform(-0.1, 0.1) for _ in range(ff_dim)] for _ in range(dim)]
+
+    def forward(self, X):
+        attn_out = self.attn.forward(X)
+        X = layer_norm(add(X, attn_out))
+        ff = relu(matmul(X, self.W1))
+        ff_out = matmul(ff, self.W2)
+        X = layer_norm(add(X, ff_out))
+        return X
+
+
+# ==========================================================
+# 7. FULL TRANSFORMER MODEL
+# ==========================================================
+class TransformerModel:
+    """Tiny GPT-like autoregressive language model."""
+
+    def __init__(self, vocab_size, dim=128, heads=2, ff_dim=64, layers=2, max_len=128):
+        self.embedding = EmbeddingLayer(vocab_size, dim)
+        self.positional = PositionalEncoding(max_len, dim)
+        self.blocks = [TransformerBlock(dim, heads, ff_dim) for _ in range(layers)]
+        self.Wout = [[random.uniform(-0.1, 0.1) for _ in range(dim)] for _ in range(vocab_size)]
+        self.vocab_size = vocab_size
+
+    def forward(self, ids):
+        X = self.embedding.lookup(ids)
+        X = self.positional.add(X)
+        for block in self.blocks:
+            X = block.forward(X)
+        logits = matmul(X, transpose(self.Wout))
+        return logits
+
+    def softmax(self, logits):
+        probs = []
+        for row in logits:
+            exp_r = [math.exp(x) for x in row]
+            s = sum(exp_r)
+            probs.append([x / s for x in exp_r])
+        return probs
+
+    def generate(self, tokenizer, prompt, max_new=30):
+        """Autoregressive token generation (like GPT)."""
+        ids = tokenizer.encode(prompt)
+        for _ in range(max_new):
+            logits = self.forward(ids)
+            probs = self.softmax([logits[-1]])[0]
+            next_id = random.choices(range(self.vocab_size), weights=probs)[0]
+            ids.append(next_id)
+            if tokenizer.id_to_token.get(next_id) == "<eos>":
+                break
+        return tokenizer.decode(ids)
+
+
+# ==========================================================
+# 8. MAIN DEMO
+# ==========================================================
+def main():
+    text = "Once upon a time there was a wise old owl who lived in an oak tree"
+    cleaner = Cleaner()
+    clean_text = cleaner.clean(text)
+
+    tokenizer = Tokenizer(vocab_size=300)
+    tokenizer.train(clean_text)
+
+    model = TransformerModel(vocab_size=len(tokenizer.vocab), dim=64, heads=2, ff_dim=32, layers=2)
+
+    prompt = "Once upon"
+    generated = model.generate(tokenizer, prompt, max_new=25)
+
+    print("\n========== MINI GPT OUTPUT ==========")
+    print(f"Prompt: {prompt}")
+    print(f"Generated Text: {generated}")
+    print("=====================================\n")
+
+
+if __name__ == "__main__":
+    main()
+
+Component	Neural Function	Analogy in GPT
+EmbeddingLayer	Input embedding weights	Token embeddings
+PositionalEncoding	Adds position info	Same
+MultiHeadAttention	Linear + softmax + weighted sum	Self-attention
+TransformerBlock	Attention + Feed-Forward NN	GPT block
+Wout	Linear output head	Output projection
+relu / softmax	Activation functions	Same
+matmul	Core math operation	Matrix multiplication
+
+import math, random, string
+
+# ========== Basic Math Utils ==========
+def matmul(A, B):
+    return [[sum(a*b for a,b in zip(row,col)) for col in zip(*B)] for row in A]
+
+def transpose(M): return list(map(list, zip(*M)))
+
+def add(A,B): return [[a+b for a,b in zip(ra,rb)] for ra,rb in zip(A,B)]
+def sub(A,B): return [[a-b for a,b in zip(ra,rb)] for ra,rb in zip(A,B)]
+
+def relu(X): return [[max(0,x) for x in row] for row in X]
+
+def softmax(logits):
+    probs=[]
+    for row in logits:
+        exps=[math.exp(x) for x in row]
+        s=sum(exps)
+        probs.append([x/s for x in exps])
+    return probs
+
+# ========== Layers ==========
+class Embedding:
+    def __init__(self, vocab, dim):
+        self.vocab=vocab; self.dim=dim
+        self.W=[[random.uniform(-0.1,0.1) for _ in range(dim)] for _ in range(vocab)]
+        self.grad=[[0]*dim for _ in range(vocab)]
+
+    def lookup(self, ids):
+        return [self.W[i] for i in ids]
+
+    def backward(self, ids, grad_out, lr):
+        for i,g in zip(ids,grad_out):
+            for j in range(self.dim):
+                self.W[i][j]-=lr*g[j]
+
+class Linear:
+    def __init__(self, inp,out):
+        self.W=[[random.uniform(-0.1,0.1) for _ in range(inp)] for _ in range(out)]
+        self.grad=[[0]*inp for _ in range(out)]
+    def forward(self,X):
+        self.X=X
+        return matmul(X, transpose(self.W))  # [n,out]
+    def backward(self,grad_out,lr):
+        # grad_W = grad_out^T * X
+        gW = matmul(transpose(grad_out), self.X)
+        for i in range(len(self.W)):
+            for j in range(len(self.W[i])):
+                self.W[i][j]-=lr*gW[i][j]
+
+# ========== Attention + FFN ==========
+def scaled_dot_attention(Q,K,V,mask_future=True):
+    dk=len(K[0])
+    scores=matmul(Q,transpose(K))
+    scores=[[s/math.sqrt(dk) for s in row] for row in scores]
+    if mask_future:
+        for i in range(len(scores)):
+            for j in range(len(scores[i])):
+                if j>i: scores[i][j]=-1e9
+    probs=softmax(scores)
+    return matmul(probs,V)
+
+class TransformerBlock:
+    def __init__(self, dim):
+        self.Wq=Linear(dim,dim)
+        self.Wk=Linear(dim,dim)
+        self.Wv=Linear(dim,dim)
+        self.Wo=Linear(dim,dim)
+        self.W1=Linear(dim,dim*2)
+        self.W2=Linear(dim*2,dim)
+    def forward(self,X):
+        Q=self.Wq.forward(X)
+        K=self.Wk.forward(X)
+        V=self.Wv.forward(X)
+        attn=scaled_dot_attention(Q,K,V)
+        X=add(X, attn)
+        ff=self.W2.forward(relu(self.W1.forward(X)))
+        X=add(X,ff)
+        return X
+
+# ========== Model ==========
+class MiniGPT:
+    def __init__(self,vocab_size,dim,depth=2):
+        self.embed=Embedding(vocab_size,dim)
+        self.blocks=[TransformerBlock(dim) for _ in range(depth)]
+        self.out=Linear(dim,vocab_size)
+
+    def forward(self,ids):
+        X=self.embed.lookup(ids)
+        for blk in self.blocks:
+            X=blk.forward(X)
+        logits=self.out.forward(X)
+        return logits
+
+    def train_step(self, ids, targets, lr=0.01):
+        # forward
+        logits=self.forward(ids)
+        probs=softmax(logits)
+        # loss
+        loss=0; grad_out=[]
+        for i,(p,t) in enumerate(zip(probs,targets)):
+            loss -= math.log(p[t]+1e-9)
+            g=[pi for pi in p]; g[t]-=1  # dL/dlogits
+            grad_out.append(g)
+        loss/=len(ids)
+
+        # backward (very simplified)
+        self.out.backward(grad_out,lr)
+        # update embeddings (simplified)
+        self.embed.backward(ids, grad_out, lr)
+        return loss
+
+    def generate(self, tokenizer, prompt, n=20):
+        ids=tokenizer.encode(prompt)
+        for _ in range(n):
+            logits=self.forward(ids)
+            probs=softmax([logits[-1]])[0]
+            next_id=random.choices(range(len(probs)), weights=probs)[0]
+            ids.append(next_id)
+        return tokenizer.decode(ids)
+
+# ========== Tokenizer ==========
+class SimpleTokenizer:
+    def __init__(self):
+        self.chars=list(" "+string.ascii_lowercase)
+        self.vocab={c:i for i,c in enumerate(self.chars)}
+        self.inv={i:c for c,i in self.vocab.items()}
+    def encode(self,text):
+        return [self.vocab.get(c,0) for c in text.lower() if c in self.vocab]
+    def decode(self,ids):
+        return "".join(self.inv[i] for i in ids)
+
+# ========== Training Example ==========
+def main():
+    tok=SimpleTokenizer()
+    model=MiniGPT(vocab_size=len(tok.vocab), dim=32, depth=2)
+
+    data="hello world"
+    ids=tok.encode(data)
+    targets=ids[1:]+[ids[0]]  # simple circular target
+
+    print("Training...")
+    for epoch in range(200):
+        loss=model.train_step(ids,targets,lr=0.05)
+        if epoch%20==0:
+            print(f"epoch {epoch} loss={loss:.4f}")
+
+    print("\nGenerated text:")
+    print(model.generate(tok,"h",40))
+
+if __name__=="__main__":
+    main()
+
+Step	What Happens
+Embedding	Converts characters → 32-dim vectors
+Attention + FFN	Each block transforms the sequence contextually
+Linear Output	Predicts probability for next token
+Loss + Backprop	Cross-entropy + gradient updates (hand-coded)
+Generate	Autoregressively samples next tokens
+
+@@@@@@@@@@@@@@@
+mini_gpt/
+├── __init__.py
+├── config.json
+├── data/
+│   ├── __init__.py
+│   └── tokenizer.py
+├── model/
+│   ├── __init__.py
+│   ├── attention.py
+│   ├── layers.py
+│   └── transformer.py
+├── utils/
+│   ├── __init__.py
+│   ├── math_utils.py
+│   └── logging_utils.py
+├── train.py
+├── generate.py
+└── tests/
+    ├── test_math_utils.py
+    ├── test_tokenizer.py
+    └── test_transformer.py
