@@ -1,0 +1,660 @@
+import os
+import json
+import re
+import string
+import math
+import random
+from collections import defaultdict
+
+class Tokenizer:
+    def __init__(self, output_dir="data/output", vocab_size=30000, use_byte_level=False):
+        self.output_dir = output_dir
+        os.makedirs(self.output_dir, exist_ok=True)
+        self.vocab_size = vocab_size
+        self.use_byte_level = use_byte_level
+        self.special_tokens = ["<unk>", "<pad>", "<bos>", "<eos>"]
+        self.vocab = {}         # token → id
+        self.id_to_token = {}   # id → token
+        self.bpe_merges = []    # list of merges (tuple)
+        self.bpe_ranks = {}     # merge pair → rank
+
+    def _initial_tokens(self, word: str):
+        if self.use_byte_level:
+            return [chr(b) for b in word.encode('utf-8')] + ['</w>']
+        else:
+            return list(word) + ['</w>']
+
+    def _get_pair_frequencies(self, corpus):
+        pairs = defaultdict(int)
+        for word in corpus:
+            for i in range(len(word) - 1):
+                pairs[(word[i], word[i + 1])] += 1
+        return pairs
+
+    def _merge_pair(self, pair, corpus):
+        new_corpus = []
+        bigram = ''.join(pair)
+        for word in corpus:
+            new_word = []
+            i = 0
+            while i < len(word):
+                if i < len(word) - 1 and (word[i], word[i + 1]) == pair:
+                    new_word.append(bigram)
+                    i += 2
+                else:
+                    new_word.append(word[i])
+                    i += 1
+            new_corpus.append(new_word)
+        return new_corpus
+
+    def train(self, text_corpus):
+        # First, split the text into words and create character-level tokens
+        words = text_corpus.split()
+        token_lists = [list(word) + ['</w>'] for word in words if word]
+        
+        # Build initial character vocabulary
+        initial_vocab = set()
+        for word_tokens in token_lists:
+            initial_vocab.update(word_tokens)
+        
+        corpus = token_lists
+        merges = []
+        
+        # BPE training
+        while len(initial_vocab) < self.vocab_size - len(self.special_tokens):
+            pair_freqs = self._get_pair_frequencies(corpus)
+            if not pair_freqs:
+                break
+                
+            # Find the most frequent pair
+            most_freq_pair = max(pair_freqs, key=pair_freqs.get)
+            if pair_freqs[most_freq_pair] <= 1:
+                break
+                
+            merges.append(most_freq_pair)
+            corpus = self._merge_pair(most_freq_pair, corpus)
+            
+            # Update vocabulary
+            initial_vocab = set()
+            for word in corpus:
+                initial_vocab.update(word)
+                
+            if len(initial_vocab) >= self.vocab_size - len(self.special_tokens):
+                break
+
+        self.bpe_merges = merges
+        
+        # Build final vocabulary
+        full_vocab = self.special_tokens + sorted(initial_vocab)
+        if len(full_vocab) > self.vocab_size:
+            full_vocab = full_vocab[:self.vocab_size]
+            
+        self.vocab = {tok: idx for idx, tok in enumerate(full_vocab)}
+        self.id_to_token = {idx: tok for tok, idx in self.vocab.items()}
+        self.bpe_ranks = {merge: i for i, merge in enumerate(self.bpe_merges)}
+        
+        return merges, initial_vocab
+
+    def save(self):
+        with open(os.path.join(self.output_dir, "vocab.json"), 'w', encoding='utf-8') as f:
+            json.dump(self.vocab, f, indent=2, ensure_ascii=False)
+        with open(os.path.join(self.output_dir, "merges.txt"), 'w', encoding='utf-8') as f:
+            f.write("#version:0.2\n")
+            for a, b in self.bpe_merges:
+                f.write(f"{a} {b}\n")
+
+    def load(self):
+        vocab_path = os.path.join(self.output_dir, "vocab.json")
+        merges_path = os.path.join(self.output_dir, "merges.txt")
+        
+        if not os.path.exists(vocab_path) or not os.path.exists(merges_path):
+            raise FileNotFoundError("Tokenizer files not found. Train the tokenizer first.")
+            
+        with open(vocab_path, 'r', encoding='utf-8') as f:
+            self.vocab = json.load(f)
+        self.id_to_token = {int(idx): tok for tok, idx in self.vocab.items()}
+        
+        with open(merges_path, 'r', encoding='utf-8') as f:
+            lines = f.read().splitlines()[1:]
+        self.bpe_merges = [tuple(line.split()) for line in lines if line.strip()]
+        self.bpe_ranks = {merge: i for i, merge in enumerate(self.bpe_merges)}
+
+    def _apply_merges(self, tokens):
+        if not self.bpe_merges:
+            return tokens
+            
+        while len(tokens) > 1:
+            pairs = [(tokens[i], tokens[i + 1]) for i in range(len(tokens) - 1)]
+            if not pairs:
+                break
+                
+            # Find the merge with lowest rank
+            best_pair = None
+            best_rank = float('inf')
+            
+            for pair in pairs:
+                rank = self.bpe_ranks.get(pair, float('inf'))
+                if rank < best_rank:
+                    best_rank = rank
+                    best_pair = pair
+                    
+            if best_pair is None:
+                break
+                
+            # Apply the best merge
+            new_tokens = []
+            i = 0
+            while i < len(tokens):
+                if i < len(tokens) - 1 and (tokens[i], tokens[i + 1]) == best_pair:
+                    new_tokens.append(tokens[i] + tokens[i + 1])
+                    i += 2
+                else:
+                    new_tokens.append(tokens[i])
+                    i += 1
+                    
+            if len(new_tokens) == len(tokens):
+                break
+            tokens = new_tokens
+            
+        return tokens
+
+    def encode(self, text: str):
+        if not self.vocab:
+            raise ValueError("Tokenizer not trained or loaded. Call train() or load() first.")
+            
+        token_ids = []
+        unknown = []
+        
+        # Handle empty text
+        if not text.strip():
+            return [], []
+            
+        for word in text.strip().split():
+            tokens = self._initial_tokens(word)
+            subtoks = self._apply_merges(tokens)
+            
+            for tok in subtoks:
+                if tok in self.vocab:
+                    token_ids.append(self.vocab[tok])
+                else:
+                    token_ids.append(self.vocab["<unk>"])
+                    if word not in unknown:
+                        unknown.append(word)
+                        
+        return token_ids, unknown
+
+    def decode(self, token_ids):
+        if not self.id_to_token:
+            raise ValueError("Tokenizer not trained or loaded. Call train() or load() first.")
+            
+        tokens = []
+        for tid in token_ids:
+            token = self.id_to_token.get(tid, "<unk>")
+            tokens.append(token)
+            
+        # Reconstruct text
+        text = ""
+        current_word = ""
+        
+        for token in tokens:
+            if token == '<unk>':
+                current_word += "?"
+            elif token.endswith('</w>'):
+                current_word += token[:-4]
+                text += current_word + " "
+                current_word = ""
+            else:
+                current_word += token
+                
+        if current_word:
+            text += current_word + " "
+            
+        return text.strip()
+
+class Cleaner:
+    def __init__(self):
+        pass
+
+    def clean(self, text: str) -> str:
+        if not text:
+            return ""
+            
+        # Remove HTML
+        text = re.sub(r'<.*?>', '', text)
+        # Remove URLs
+        text = re.sub(r'https?://\S+|www\.\S+', '', text)
+        # Keep only ASCII characters (relaxed for real text)
+        text = text.encode('ascii', 'ignore').decode('ascii')
+        # Remove excessive punctuation but keep basic sentence structure
+        text = re.sub(r'[^\w\s\.\,\!\?]', '', text)
+        # Normalize spaces
+        text = re.sub(r'\s+', ' ', text).strip()
+        
+        return text.lower()  # Normalize case
+
+class EmbeddingLayer:
+    def __init__(self, vocab_size, embedding_dim):
+        self.vocab_size = vocab_size
+        self.embedding_dim = embedding_dim
+        self.embeddings = self._initialize_embeddings()
+
+    def _initialize_embeddings(self):
+        # Xavier initialization
+        scale = math.sqrt(2.0 / (self.vocab_size + self.embedding_dim))
+        return [
+            [random.uniform(-scale, scale) for _ in range(self.embedding_dim)]
+            for _ in range(self.vocab_size)
+        ]
+
+    def lookup(self, token_ids):
+        return [self.embeddings[token_id] for token_id in token_ids]
+
+    def update(self, token_id, gradient, learning_rate=0.01):
+        if token_id >= len(self.embeddings):
+            return
+        for i in range(self.embedding_dim):
+            self.embeddings[token_id][i] -= learning_rate * gradient[i]
+
+    def save(self, filepath="data/output/embedding_matrix.txt"):
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        with open(filepath, "w") as f:
+            for vector in self.embeddings:
+                f.write(" ".join(map(str, vector)) + "\n")
+
+    def load(self, filepath="data/output/embedding_matrix.txt"):
+        if not os.path.exists(filepath):
+            raise FileNotFoundError(f"Embedding file {filepath} not found")
+        with open(filepath, "r") as f:
+            self.embeddings = [
+                list(map(float, line.strip().split()))
+                for line in f.readlines()
+            ]
+
+class PositionalEncoding:
+    def __init__(self, max_len, embedding_dim):
+        self.max_len = max_len
+        self.embedding_dim = embedding_dim
+        self.encoding = self._generate_encoding()
+
+    def _generate_encoding(self):
+        encoding = []
+        for pos in range(self.max_len):
+            row = []
+            for i in range(self.embedding_dim):
+                if i % 2 == 0:
+                    # Even indices: sine
+                    row.append(math.sin(pos / (10000 ** (i / self.embedding_dim))))
+                else:
+                    # Odd indices: cosine
+                    row.append(math.cos(pos / (10000 ** ((i - 1) / self.embedding_dim))))
+            encoding.append(row)
+        return encoding
+
+    def get(self, position):
+        if position >= len(self.encoding):
+            # Extend encoding if needed
+            return self.encoding[-1]
+        return self.encoding[position]
+    
+    def combine_embeddings(self, token_embeddings, positional_encodings):
+        if len(token_embeddings) != len(positional_encodings):
+            raise ValueError("Mismatch between token embeddings and positional encodings length")
+            
+        return [
+            [token_embeddings[i][j] + positional_encodings[i][j] 
+             for j in range(len(token_embeddings[i]))]
+            for i in range(len(token_embeddings))
+        ]
+
+# Math utility functions
+def matmul(A, B):
+    """Matrix multiplication A @ B"""
+    if not A or not B:
+        return []
+        
+    a_rows, a_cols = len(A), len(A[0])
+    b_rows, b_cols = len(B), len(B[0])
+    
+    if a_cols != b_rows:
+        raise ValueError(f"Matrix dimension mismatch: {a_cols} != {b_rows}")
+    
+    result = [[0.0] * b_cols for _ in range(a_rows)]
+    
+    for i in range(a_rows):
+        for j in range(b_cols):
+            for k in range(a_cols):
+                result[i][j] += A[i][k] * B[k][j]
+                
+    return result
+
+def transpose(M):
+    """Transpose matrix"""
+    if not M:
+        return []
+    return [[M[j][i] for j in range(len(M))] for i in range(len(M[0]))]
+
+def add_matrices(A, B):
+    """Element-wise matrix addition"""
+    if len(A) != len(B) or len(A[0]) != len(B[0]):
+        raise ValueError("Matrix dimension mismatch for addition")
+        
+    return [[a + b for a, b in zip(row_a, row_b)] 
+            for row_a, row_b in zip(A, B)]
+
+def scaled_dot_product_attention(Q, K, V):
+    """Scaled dot-product attention"""
+    dk = len(K[0])
+    
+    # Q @ K^T
+    scores = matmul(Q, transpose(K))
+    
+    # Scale
+    scores = [[s / math.sqrt(dk) for s in row] for row in scores]
+    
+    # Softmax
+    softmax_scores = []
+    for row in scores:
+        max_val = max(row)
+        exp_row = [math.exp(x - max_val) for x in row]
+        sum_exp = sum(exp_row)
+        softmax_scores.append([x / sum_exp for x in exp_row])
+    
+    # Softmax @ V
+    return matmul(softmax_scores, V)
+
+class MultiHeadAttention:
+    def __init__(self, embedding_dim, num_heads):
+        if embedding_dim % num_heads != 0:
+            raise ValueError("embedding_dim must be divisible by num_heads")
+            
+        self.embedding_dim = embedding_dim
+        self.num_heads = num_heads
+        self.head_dim = embedding_dim // num_heads
+        
+        # Initialize weights with proper scaling
+        scale = math.sqrt(2.0 / (embedding_dim + embedding_dim))
+        self.Wq = [[random.uniform(-scale, scale) for _ in range(embedding_dim)] 
+                   for _ in range(embedding_dim)]
+        self.Wk = [[random.uniform(-scale, scale) for _ in range(embedding_dim)] 
+                   for _ in range(embedding_dim)]
+        self.Wv = [[random.uniform(-scale, scale) for _ in range(embedding_dim)] 
+                   for _ in range(embedding_dim)]
+        self.Wo = [[random.uniform(-scale, scale) for _ in range(embedding_dim)] 
+                   for _ in range(embedding_dim)]
+
+    def split_heads(self, X):
+        """Split embedding dimension into multiple heads"""
+        batch_size = len(X)
+        # Reshape: [batch_size, seq_len, num_heads, head_dim]
+        heads = []
+        for i in range(self.num_heads):
+            head = []
+            for j in range(batch_size):
+                start = i * self.head_dim
+                end = start + self.head_dim
+                head.append(X[j][start:end])
+            heads.append(head)
+        return heads
+
+    def combine_heads(self, heads):
+        """Combine attention heads back to original shape"""
+        batch_size = len(heads[0])
+        combined = []
+        for i in range(batch_size):
+            combined_vec = []
+            for head in heads:
+                combined_vec.extend(head[i])
+            combined.append(combined_vec)
+        return combined
+
+    def forward(self, X):
+        # Linear projections
+        Q = matmul(X, self.Wq)
+        K = matmul(X, self.Wk)
+        V = matmul(X, self.Wv)
+        
+        # Split into heads
+        Q_heads = self.split_heads(Q)
+        K_heads = self.split_heads(K)
+        V_heads = self.split_heads(V)
+        
+        # Attention for each head
+        head_outputs = []
+        for i in range(self.num_heads):
+            head_out = scaled_dot_product_attention(Q_heads[i], K_heads[i], V_heads[i])
+            head_outputs.append(head_out)
+        
+        # Combine heads
+        concat_output = self.combine_heads(head_outputs)
+        
+        # Output projection
+        output = matmul(concat_output, self.Wo)
+        return output
+
+def feedforward(X, hidden_dim):
+    """Simple feedforward with ReLU"""
+    # Simple projection + ReLU
+    # For simplicity, using ReLU directly on input
+    return [[max(0.1 * val, val) for val in row] for row in X]  # Leaky ReLU
+
+def layer_norm(X, eps=1e-6):
+    """Layer normalization"""
+    normalized = []
+    for row in X:
+        mean = sum(row) / len(row)
+        var = sum((x - mean) ** 2 for x in row) / len(row)
+        std = math.sqrt(var + eps)
+        normalized.append([(x - mean) / std for x in row])
+    return normalized
+
+class TransformerBlock:
+    def __init__(self, embedding_dim, num_heads, ff_hidden_dim):
+        self.mha = MultiHeadAttention(embedding_dim, num_heads)
+        self.embedding_dim = embedding_dim
+        self.ff_hidden_dim = ff_hidden_dim
+
+    def forward(self, X):
+        # Multi-head attention with residual connection and layer norm
+        attn_output = self.mha.forward(X)
+        X_res1 = add_matrices(X, attn_output)
+        X_norm1 = layer_norm(X_res1)
+        
+        # Feedforward with residual connection and layer norm
+        ff_output = feedforward(X_norm1, self.ff_hidden_dim)
+        X_res2 = add_matrices(X_norm1, ff_output)
+        X_norm2 = layer_norm(X_res2)
+        
+        return X_norm2
+
+def output_layer(X, vocab_size):
+    """Simple linear projection to vocabulary size"""
+    if not X:
+        return []
+        
+    embedding_dim = len(X[0])
+    # Initialize output weights
+    scale = math.sqrt(2.0 / (embedding_dim + vocab_size))
+    W_out = [[random.uniform(-scale, scale) for _ in range(embedding_dim)] 
+             for _ in range(vocab_size)]
+    
+    logits = matmul(X, transpose(W_out))
+    return logits
+
+def softmax(logits):
+    """Softmax activation"""
+    if not logits:
+        return []
+        
+    probs = []
+    for row in logits:
+        max_val = max(row)
+        exp_row = [math.exp(x - max_val) for x in row]
+        sum_exp = sum(exp_row)
+        probs.append([x / sum_exp for x in exp_row])
+    return probs
+
+def cross_entropy(probs, targets):
+    """Cross-entropy loss"""
+    if len(targets) > len(probs):
+        targets = targets[:len(probs)]
+        
+    loss = 0.0
+    for i, target in enumerate(targets):
+        if i >= len(probs):
+            continue
+        if target >= len(probs[i]):
+            # Use the last probability if target is out of range
+            target = len(probs[i]) - 1
+        loss -= math.log(probs[i][target] + 1e-9)
+        
+    return loss / max(1, len(targets))
+
+def cosine_similarity(vec1, vec2):
+    """Compute cosine similarity between two vectors"""
+    dot = sum(a * b for a, b in zip(vec1, vec2))
+    norm1 = math.sqrt(sum(a * a for a in vec1))
+    norm2 = math.sqrt(sum(b * b for b in vec2))
+    return dot / (norm1 * norm2) if norm1 and norm2 else 0.0
+
+def average_embedding(vectors):
+    """Compute average of multiple embedding vectors"""
+    if not vectors:
+        return []
+    return [sum(dim) / len(vectors) for dim in zip(*vectors)]
+
+def main():
+    input_file = "data/input/userdata.txt"
+    output_dir = "data/output"
+    
+    # Parameters - reduced for demo
+    vocab_size = 500  # Small vocab for demo
+    embedding_dim = 64  # Reduced for demo
+    sequence_length = 256
+    num_heads = 4
+    ff_hidden_dim = 128
+    lr = 0.01
+
+    # Ensure directories exist
+    os.makedirs("data/input", exist_ok=True)
+    os.makedirs("data/output", exist_ok=True)
+
+    # Create comprehensive sample data for better tokenization
+    if not os.path.exists(input_file):
+        sample_text = """
+        Machine learning is a subset of artificial intelligence that provides systems the ability to automatically learn and improve from experience without being explicitly programmed. 
+        Machine learning focuses on the development of computer programs that can access data and use it to learn for themselves. 
+        The process of learning begins with observations or data, such as examples, direct experience, or instruction, in order to look for patterns in data and make better decisions in the future based on the examples that we provide. 
+        The primary aim is to allow the computers to learn automatically without human intervention or assistance and adjust actions accordingly.
+        
+        Can You Explain Kernel Trick In An SVM Algorithm?
+        A Kernel Trick is a method where the Non-Linear data is projected onto a bigger dimension space in order to make it easy to classify the data where it can be linearly divided by a plane.
+        Support Vector Machines are powerful classification algorithms that can handle both linear and non-linear data using kernel methods.
+        The kernel trick allows SVMs to operate in a high-dimensional feature space without explicitly computing the coordinates of the data in that space.
+        """
+        
+        with open(input_file, 'w', encoding='utf-8') as f:
+            f.write(sample_text)
+
+    # 1) Read and clean corpus
+    with open(input_file, 'r', encoding='utf-8') as f:
+        raw = f.read()
+
+    cleaner = Cleaner()
+    cleaned = cleaner.clean(raw)
+    
+    print("Training tokenizer on cleaned text...")
+    
+    # 2) Train tokenizer with the full text
+    tokenizer = Tokenizer(output_dir=output_dir, vocab_size=vocab_size, use_byte_level=False)
+    merges, tokens = tokenizer.train(cleaned)
+    tokenizer.save()
+
+    # 3) Load tokenizer and encode
+    tokenizer.load()
+    
+    text = "Can You Explain Kernel Trick In An SVM Algorithm"
+    expectoutput = "A Kernel Trick is a method where the Non-Linear data is projected onto a bigger dimension space in order to make it easy to classify the data where it can be linearly divided by a plane"
+    
+    print("User input:", text)
+    ids, unknown = tokenizer.encode(text)
+    outputids, output_unknown = tokenizer.encode(expectoutput)
+
+    print("Token IDs:", ids)
+    print("Target IDs:", outputids)
+    
+    if unknown:
+        print("Unknown words in input:", unknown)
+        # Retrain with unknown words
+        print("Retraining tokenizer with unknown words...")
+        additional_text = " ".join(unknown) + " " + expectoutput
+        full_text = cleaned + " " + additional_text
+        tokenizer.train(full_text)
+        tokenizer.save()
+        
+        # Re-encode
+        ids, unknown = tokenizer.encode(text)
+        outputids, output_unknown = tokenizer.encode(expectoutput)
+        print("After retraining - Token IDs:", ids)
+        print("After retraining - Target IDs:", outputids)
+    
+    if output_unknown:
+        print("Unknown words in target:", output_unknown)
+
+    # Initialize layers
+    actual_vocab_size = len(tokenizer.vocab)
+    print(f"Actual vocabulary size: {actual_vocab_size}")
+    
+    embedding = EmbeddingLayer(vocab_size=actual_vocab_size, embedding_dim=embedding_dim)
+    pos_encoder = PositionalEncoding(max_len=sequence_length, embedding_dim=embedding_dim)
+    block = TransformerBlock(embedding_dim, num_heads, ff_hidden_dim)
+
+    # Ensure sequences are not empty
+    if not ids or not outputids:
+        print("Error: Empty sequences after tokenization")
+        return
+
+    # Training loop
+    print("Starting training...")
+    for epoch in range(3):  # Reduced for demo
+        # Forward pass
+        token_vectors = embedding.lookup(ids)
+        pos_vectors = [pos_encoder.get(i) for i in range(len(ids))]
+        
+        if len(token_vectors) != len(pos_vectors):
+            print(f"Warning: Length mismatch - tokens: {len(token_vectors)}, positions: {len(pos_vectors)}")
+            min_len = min(len(token_vectors), len(pos_vectors))
+            token_vectors = token_vectors[:min_len]
+            pos_vectors = pos_vectors[:min_len]
+            
+        input_vectors = pos_encoder.combine_embeddings(token_vectors, pos_vectors)
+        transformer_output = block.forward(input_vectors)
+        logits = output_layer(transformer_output, actual_vocab_size)
+        probs = softmax(logits)
+
+        # Compute loss
+        loss = cross_entropy(probs, outputids)
+        print(f"Epoch {epoch + 1}, Loss: {loss:.4f}")
+
+        # Simple gradient update (simplified backprop)
+        for i, token_id in enumerate(ids):
+            if i < len(probs) and token_id < actual_vocab_size:
+                # Simplified gradient - in practice, you'd compute proper gradients
+                grad = [0.1 * (random.random() - 0.5) for _ in range(embedding_dim)]
+                embedding.update(token_id, grad, lr)
+
+    # Save embeddings
+    embedding.save()
+    
+    # Test decoding
+    decoded = tokenizer.decode(ids)
+    print("Decoded input:", decoded)
+    
+    # Test with a simple similarity
+    if len(ids) > 0 and len(outputids) > 0:
+        input_embed = embedding.lookup([ids[0]])[0]
+        target_embed = embedding.lookup([outputids[0]])[0]
+        sim = cosine_similarity(input_embed, target_embed)
+        print(f"Cosine similarity between first tokens: {sim:.4f}")
+
+if __name__ == "__main__":
+    main()
