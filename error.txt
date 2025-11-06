@@ -1,0 +1,18 @@
+User input: Can You Explain Kernel Trick In An SVM Algorithm
+Token IDs: [0, 7, 63, 0, 65, 94, 6, 0, 0, 71, 55, 7, 49, 0, 36, 62, 31, 6, 0, 77, 46, 20, 54, 6, 0, 63, 0, 63, 0, 0, 0, 6, 0, 55, 44, 0, 46, 87, 59, 6]
+Target IDs: [0, 6, 0, 36, 62, 31, 6, 0, 77, 46, 20, 54, 6, 52, 8, 59, 29, 87, 65, 25, 97, 45, 36, 30, 89, 0, 65, 62, 0, 0, 48, 29, 15, 6, 27, 52, 73, 53, 29, 20, 84, 29, 25, 65, 62, 93, 8, 18, 46, 44, 44, 36, 6, 24, 47, 33, 81, 68, 78, 71, 9, 30, 49, 70, 36, 6, 93, 60, 54, 30, 46, 85, 29, 7, 78, 101, 93, 20, 55, 7, 78, 81, 42, 101, 89, 27, 97, 45, 36, 30, 46, 85, 20, 7, 63, 18, 30, 55, 48, 29, 15, 55, 101, 24, 46, 96, 46, 28, 25, 18, 101, 8, 71, 55, 13, 30]
+Unknown words in input: ['Can', 'You', 'Explain', 'Kernel', 'Trick', 'In', 'An', 'SVM', 'Algorithm']
+Unknown words in target: ['A', 'Kernel', 'Trick', 'Non-Linear']
+Traceback (most recent call last):
+  File "C:\Users\kgnanas6\Karthick\AI_Learning\rag_llm\main.py", line 737, in <module>
+    main()
+  File "C:\Users\kgnanas6\Karthick\AI_Learning\rag_llm\main.py", line 697, in main
+    embedding = EmbeddingLayer(vocab_size=actual_vocab_size, embedding_dim=embedding_dim)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\kgnanas6\Karthick\AI_Learning\rag_llm\main.py", line 352, in __init__
+    self.embeddings = self._initialize_embeddings()
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\kgnanas6\Karthick\AI_Learning\rag_llm\main.py", line 358, in _initialize_embeddings
+    [random.uniform(-scale, scale) for _ in range(self.embedding_dim)]
+     ^^^^^^^^^^^^^^
+AttributeError: 'builtin_function_or_method' object has no attribute 'uniform'
