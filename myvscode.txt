@@ -1,499 +1,438 @@
+from my_token.tokenizer import Tokenizer
+from my_token.cleanner import clean_algorithum
 import os
+from my_embed.embedding import Embedding
+from my_transformer.transformer import TransformerClassifier
+
+def readfile(filepath):
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"File not found: {filepath}")
+    with open(filepath, 'r', encoding='utf-8') as file:
+        raw = file.read()
+    return raw
+
+def cross_entropy_loss(probs, label):
+    # label: int (class index)
+    return -math.log(probs[label] + 1e-8)
+
+def train_classifier(texts, labels, tokenizer, embedder, classifier, epochs=5, lr=0.01):
+    for epoch in range(epochs):
+        total_loss = 0
+        for text, label in zip(texts, labels):
+            encoded = tokenizer.encode(text)
+            embedded = embedder.lookup(encoded)
+            probs = classifier.forward(embedded)
+            loss = cross_entropy_loss(probs, label)
+            total_loss += loss
+            # NOTE: No real backprop here, just a placeholder for research structure
+            # In pure Python, you would need to manually update weights
+        print(f"Epoch {epoch+1}, Loss: {total_loss/len(texts):.4f}")
+
+def main():
+    filepath = 'data/input/inputdata.txt'
+    vocab_size = 30000
+    embedding_dim = 128
+    num_heads = 8
+    ff_hidden_dim = 256
+    num_layers = 2
+    num_classes = 3  # Example: 3 classes
+
+    try:
+        # Read and preprocess data
+        rawdata = readfile(filepath)
+        cleaner = clean_algorithum()
+        clean_data = cleaner.clean_text(rawdata)
+
+        # Prepare dummy labeled data for demonstration
+        texts = [
+            "What is Artificial Intelligence",
+            "Machine learning is a subset of AI",
+            "Deep learning uses neural networks"
+        ]
+        labels = [0, 1, 2]  # Example class indices
+
+        # Initialize and train tokenizer
+        tokenizer = Tokenizer(vocab_size=vocab_size)
+        tokenizer.train(clean_data)
+        tokenizer.save()
+
+        # Embedding
+        embedder = Embedding(vocab_size, embedding_dim)
+
+        # Transformer classifier
+        seq_len = max(len(tokenizer.encode(t)) for t in texts)
+        classifier = TransformerClassifier(num_layers, embedding_dim, num_heads, ff_hidden_dim, seq_len, num_classes)
+
+        # Training loop
+        train_classifier(texts, labels, tokenizer, embedder, classifier, epochs=5, lr=0.01)
+
+        # Evaluation example
+        test_text = "What is Artificial Intelligence"
+        encoded = tokenizer.encode(test_text)
+        embedded = embedder.lookup(encoded)
+        probs = classifier.forward(embedded)
+        print(f"\nTest: {test_text}")
+        print("Classification probabilities:", probs)
+
+    except FileNotFoundError as e:
+        print(f"File error: {e}")
+    except Exception as e:
+        print(f"Error in main: {e}")
+        raise
+
+if __name__ == "__main__":
+    import math
+    main()
+
+import os
+import re
 import json
-from collections import defaultdict
+import unicodedata
+from collections import Counter, defaultdict
 
 class Tokenizer:
-    def __init__(self, output_dir="data/output", vocab_size=30000, use_byte_level=False):
-        self.output_dir = output_dir
-        os.makedirs(self.output_dir, exist_ok=True)
+    def __init__(self, vocab_size=50000, lowercase=False, output_dir="data/output", special_tokens=None):
         self.vocab_size = vocab_size
-        self.use_byte_level = use_byte_level
-        self.special_tokens = ["<unk>", "<pad>", "<bos>", "<eos>"]
-        self.vocab = {}         # token → id
-        self.id_to_token = {}   # id → token
-        self.bpe_merges = []    # list of merges (tuple)
-        self.bpe_ranks = {}     # merge pair → rank
+        self.lowercase = lowercase
+        self.byte_encoder = {i: chr(i) for i in range(256)}
+        self.byte_decoder = {v: k for k, v in self.byte_encoder.items()}
+        self.special_tokens = set(special_tokens or ["<unk>", "<pad>", "<eos>"])
+        self.vocab = {}
+        self.merges = []
+        self.output_dir = os.path.join(output_dir)
+        os.makedirs(self.output_dir, exist_ok=True)
 
-    def _initial_tokens(self, word: str):
-        if self.use_byte_level:
-            return [chr(b) for b in word.encode('utf-8')] + ['</w>']
-        else:
-            return list(word) + ['</w>']
+    def _normalize(self, text):
+        text = unicodedata.normalize("NFKC", text)
+        return text.lower() if self.lowercase else text
 
-    def _get_pair_frequencies(self, corpus):
-        pairs = defaultdict(int)
-        for word in corpus:
-            for i in range(len(word) - 1):
-                pairs[(word[i], word[i + 1])] += 1
-        return pairs
-
-    def _merge_pair(self, pair, corpus):
-        new_corpus = []
-        bigram = ''.join(pair)
-        for word in corpus:
-            new_word = []
-            i = 0
-            while i < len(word):
-                if i < len(word) - 1 and (word[i], word[i + 1]) == pair:
-                    new_word.append(bigram)
-                    i += 2
-                else:
-                    new_word.append(word[i])
-                    i += 1
-            new_corpus.append(new_word)
-        return new_corpus
-
-    def train(self, token_lists):
-        merges = []
-        token_set = set()
-        corpus = token_lists
-
-        while len(token_set) < self.vocab_size:
-            pair_freqs = self._get_pair_frequencies(corpus)
-            if not pair_freqs:
-                break
-            most_freq = max(pair_freqs, key=pair_freqs.get)
-            merges.append(most_freq)
-            corpus = self._merge_pair(most_freq, corpus)
-            for word in corpus:
-                token_set.update(word)
-            if len(token_set) >= self.vocab_size:
-                break
-
-        self.bpe_merges = merges
-        full_vocab = self.special_tokens + sorted(token_set)
-        self.vocab = {tok: idx for idx, tok in enumerate(full_vocab)}
-        self.id_to_token = {idx: tok for tok, idx in self.vocab.items()}
-        self.bpe_ranks = {merge: i for i, merge in enumerate(self.bpe_merges)}
-        return merges, token_set
-
-    def save(self):
-        with open(os.path.join(self.output_dir, "vocab.json"), 'w', encoding='utf-8') as f:
-            json.dump(self.vocab, f, indent=2)
-        with open(os.path.join(self.output_dir, "merges.txt"), 'w', encoding='utf-8') as f:
-            f.write("#version:0.2\n")
-            for a, b in self.bpe_merges:
-                f.write(f"{a} {b}\n")
-
-    def load(self):
-        with open(os.path.join(self.output_dir, "vocab.json"), 'r', encoding='utf-8') as f:
-            self.vocab = json.load(f)
-        self.id_to_token = {int(idx): tok for tok, idx in self.vocab.items()}
-        with open(os.path.join(self.output_dir, "merges.txt"), 'r', encoding='utf-8') as f:
-            lines = f.read().splitlines()[1:]
-        self.bpe_merges = [tuple(line.split()) for line in lines]
-        self.bpe_ranks = {merge: i for i, merge in enumerate(self.bpe_merges)}
-
-    def _apply_merges(self, tokens):
-        while True:
-            pairs = [(tokens[i], tokens[i + 1]) for i in range(len(tokens) - 1)]
-            if not pairs:
-                break
-            ranked = [(pair, self.bpe_ranks.get(pair, float('inf'))) for pair in pairs]
-            if all(rank == float('inf') for _, rank in ranked):
-                break
-            best_pair, _ = min(ranked, key=lambda x: x[1])
-            new_tokens = []
-            i = 0
-            while i < len(tokens):
-                if i < len(tokens) - 1 and (tokens[i], tokens[i + 1]) == best_pair:
-                    new_tokens.append(tokens[i] + tokens[i + 1])
-                    i += 2
-                else:
-                    new_tokens.append(tokens[i])
-                    i += 1
-            tokens = new_tokens
+    def _tokenize(self, text):
+        # Advanced: Split on punctuation, keep contractions, etc.
+        tokens = re.findall(r"\w+|[^\w\s]", text, re.UNICODE)
         return tokens
 
-    def encode(self, text: str):
-        token_ids = []
-        unknown = []
-        for word in text.strip().split():
-            tokens = self._initial_tokens(word)
-            subtoks = self._apply_merges(tokens)
-            word_unknown = False
-            for tok in subtoks:
-                if tok in self.vocab:
-                    token_ids.append(self.vocab[tok])
-                else:
-                    word_unknown = True
-                    token_ids.append(self.vocab.get("<unk>", 0))
-            if word_unknown:
-                unknown.append(word)
-        return token_ids, unknown
+    def _byte_encode(self, text):
+        return tuple(self.byte_encoder[b] for b in text.encode("utf-8"))
+
+    def _byte_decode(self, symbols):
+        byte_list = []
+        for s in symbols:
+            for ch in s:
+                if ch in self.byte_decoder:
+                    byte_list.append(self.byte_decoder[ch])
+        return bytes(byte_list).decode("utf-8", errors="replace")
+
+    def _get_stats(self, vocab):
+        pairs = defaultdict(int)
+        for word, freq in vocab.items():
+            for i in range(len(word) - 1):
+                pairs[(word[i], word[i + 1])] += freq
+        return pairs
+
+    def _merge_vocab(self, pair, vocab_in):
+        pattern = re.escape(' '.join(pair))
+        pattern = re.compile(r'(?<!\S)' + pattern + r'(?!\S)')
+        vocab_out = {}
+        for word, freq in vocab_in.items():
+            w = ' '.join(word)
+            w_new = pattern.sub(''.join(pair), w)
+            vocab_out[tuple(w_new.split())] = freq
+        return vocab_out
+
+    def train(self, corpus):
+        corpus = self._normalize(corpus)
+        vocab = Counter()
+        for word in self._tokenize(corpus):
+            encoded = self._byte_encode(word)
+            vocab[encoded] += 1
+
+        while True:
+            pairs = self._get_stats(vocab)
+            if not pairs:
+                break
+            best = max(pairs, key=pairs.get)
+            vocab = self._merge_vocab(best, vocab)
+            self.merges.append(best)
+            if len(self.merges) >= self.vocab_size - len(self.special_tokens):
+                break
+
+        symbols = set()
+        for word in vocab:
+            symbols.update(word)
+        sorted_symbols = sorted(symbols)
+        self.vocab = {tok: i for i, tok in enumerate(sorted(self.special_tokens))}
+        start_idx = len(self.vocab)
+        for i, sym in enumerate(sorted_symbols, start=start_idx):
+            self.vocab[sym] = i
+
+    def encode(self, text, add_eos=True, pad_to_length=None):
+        text = self._normalize(text)
+        symbols = []
+        for token in self._tokenize(text):
+            s = self._byte_encode(token)
+            for merge in self.merges:
+                i = 0
+                while i < len(s) - 1:
+                    if (s[i], s[i + 1]) == merge:
+                        s = s[:i] + (''.join(merge),) + s[i + 2:]
+                    else:
+                        i += 1
+            symbols.extend(s)
+        token_ids = [self.vocab.get(s, self.vocab["<unk>"]) for s in symbols]
+        if add_eos:
+            token_ids.append(self.vocab["<eos>"])
+        if pad_to_length:
+            pad_id = self.vocab["<pad>"]
+            token_ids += [pad_id] * (pad_to_length - len(token_ids))
+        return token_ids
 
     def decode(self, token_ids):
-        tokens = [self.id_to_token.get(tid, "<unk>") for tid in token_ids]
-        words = []
-        cur = ""
-        for tok in tokens:
-            if tok.endswith('</w>'):
-                cur += tok[:-len('</w>')]
-                words.append(cur)
-                cur = ""
-            else:
-                cur += tok
-        if cur:
-            words.append(cur)
-        return " ".join(words)
-        
+        reverse_vocab = {v: k for k, v in self.vocab.items()}
+        decoded_words = []
+        for tid in token_ids:
+            sym = reverse_vocab.get(tid)
+            if sym and sym not in self.special_tokens:
+                decoded_words.append(sym)
+        return ' '.join(self._byte_decode([word]) for word in decoded_words)
+
+    def save(self):
+        vocab_path = os.path.join(self.output_dir, "vocab.json")
+        merges_path = os.path.join(self.output_dir, "merges.txt")
+        with open(vocab_path, "w", encoding="utf-8") as vf:
+            json.dump(self.vocab, vf, ensure_ascii=False, indent=2)
+        with open(merges_path, "w", encoding="utf-8") as mf:
+            for a, b in self.merges:
+                mf.write(f"{a} {b}\n")
+        print(f"Tokenizer saved to {self.output_dir}")
+
+    @classmethod
+    def load(cls, output_dir="data/output"):
+        vocab_path = os.path.join(output_dir, "vocab.json")
+        merges_path = os.path.join(output_dir, "merges.txt")
+        tok = cls()
+        with open(vocab_path, "r", encoding="utf-8") as vf:
+            tok.vocab = json.load(vf)
+        with open(merges_path, "r", encoding="utf-8") as mf:
+            tok.merges = [tuple(line.strip().split()) for line in mf if line.strip()]
+        return tok
+
+
 import re
 import string
-class Cleaner:
-    def __init__(self):
-        pass
 
-    def clean(self, text: str) -> str:
-        # Remove HTML
-        text = re.sub(r'<.*?>', '', text)
+class clean_algorithum:
+    def __init__(self):
+        self.preserve_tokens = ['<unk>', '<pad>', '<bos>', '<eos>']
+    
+    def clean_text(self, text):
+        # Remove HTML tags
+        text = re.sub(r'<(?!(?:' + '|'.join(self.preserve_tokens) + '))[^>]*>', '', text)
+        
         # Remove URLs
-        text = re.sub(r'https?://\S+|www\.\S+', '', text)
-        # Keep only ASCII characters
+        text = re.sub(r'http\S+|www\S+|https\S+', '', text)
+        
+        # Convert to ASCII but preserve important characters
         text = text.encode('ascii', 'ignore').decode('ascii')
-        # Remove punctuation
-        text = text.translate(str.maketrans('', '', string.punctuation))
-        # Remove digits
-        text = re.sub(r'\d+', '', text)
-        # Normalize spaces
+        
+        # Remove extra whitespace
         text = re.sub(r'\s+', ' ', text).strip()
+        
         return text
 
 import random
-import math
 
-class EmbeddingLayer:
+class Embedding:
     def __init__(self, vocab_size, embedding_dim):
         self.vocab_size = vocab_size
         self.embedding_dim = embedding_dim
-        self.embeddings = self._initialize_embeddings()
-
-    def _initialize_embeddings(self):
-        return [
-            [random.uniform(-0.1, 0.1) for _ in range(self.embedding_dim)]
-            for _ in range(self.vocab_size)
+        # Randomly initialize embeddings for each token ID
+        self.embeddings = [
+            [random.uniform(-0.1, 0.1) for _ in range(embedding_dim)]
+            for _ in range(vocab_size)
         ]
 
     def lookup(self, token_ids):
+        # Return list of embedding vectors for given token IDs
         return [self.embeddings[token_id] for token_id in token_ids]
-
-    def update(self, token_id, gradient, learning_rate=0.01):
-        for i in range(self.embedding_dim):
-            self.embeddings[token_id][i] -= learning_rate * gradient[i]
-
-    def save(self, filepath="data/output/embedding_matrix.txt"):
-        with open(filepath, "w") as f:
-            for vector in self.embeddings:
-                f.write(" ".join(map(str, vector)) + "\n")
-
-    def load(self, filepath="data/output/embedding_matrix.txt"):
-        with open(filepath, "r") as f:
-            self.embeddings = [
-                list(map(float, line.strip().split()))
-                for line in f.readlines()
-            ]
-
-
-
-class PositionalEncoding:
-    def __init__(self, max_len, embedding_dim):
-        self.max_len = max_len
-        self.embedding_dim = embedding_dim
-        # self.encoding = self._generate_encoding()
-        
-        self.encoding = [
-                    [math.sin(pos / math.pow(10000, 2 * (i // 2) / embedding_dim)) if i % 2 == 0
-                    else math.cos(pos / math.pow(10000, 2 * (i // 2) / embedding_dim))
-                    for i in range(embedding_dim)]
-                    for pos in range(max_len)
-                ]
-
-
-    def _generate_encoding(self):
-        encoding = []
-        for pos in range(self.max_len):
-            row = []
-            for i in range(self.embedding_dim):
-                angle = pos / math.pow(10000, (2 * (i // 2)) / self.embedding_dim)
-                if i % 2 == 0:
-                    row.append(math.sin(angle))
-                else:
-                    row.append(math.cos(angle))
-            encoding.append(row)
-        return encoding
-
-    
-    def get(self, position):
-            if position >= len(self.encoding):
-                raise ValueError(f"Position {position} exceeds max_len {len(self.encoding)}")
-            return self.encoding[position]
-    
-    def combine_embeddings(self,token_embeddings, positional_encodings):
-        return [
-            [token_embeddings[i][j] + positional_encodings[i][j] for j in range(len(token_embeddings[i]))]
-            for i in range(len(token_embeddings))
-        ]
-
 import math
 import random
 
-def matmul(A, B):
-    return [[sum(a * b for a, b in zip(row, col)) for col in zip(*B)] for row in A]
+def positional_encoding(seq_len, embedding_dim):
+    pe = []
+    for pos in range(seq_len):
+        row = []
+        for i in range(embedding_dim):
+            angle = pos / math.pow(10000, 2 * (i // 2) / embedding_dim)
+            if i % 2 == 0:
+                row.append(math.sin(angle))
+            else:
+                row.append(math.cos(angle))
+        pe.append(row)
+    return pe
 
-def transpose(M):
-    return list(map(list, zip(*M)))
+def softmax(x):
+    exp_x = [math.exp(i) for i in x]
+    sum_exp = sum(exp_x)
+    return [i / sum_exp for i in exp_x]
 
-def add_matrices(A, B):
-    return [[a + b for a, b in zip(row_a, row_b)] for row_a, row_b in zip(A, B)]
+def matmul(a, b):
+    result = []
+    for row in a:
+        new_row = []
+        for col in zip(*b):
+            new_row.append(sum(x * y for x, y in zip(row, col)))
+        result.append(new_row)
+    return result
 
-def scaled_dot_product_attention(Q, K, V):
-    dk = len(K[0])
-    scores = matmul(Q, transpose(K))
-    scores = [[s / math.sqrt(dk) for s in row] for row in scores]
-    softmax_scores = []
-    for row in scores:
-        exp_row = [math.exp(x) for x in row]
-        sum_exp = sum(exp_row)
-        softmax_scores.append([x / sum_exp for x in exp_row])
-    return matmul(softmax_scores, V)
+def add(a, b):
+    return [[ai + bi for ai, bi in zip(ar, br)] for ar, br in zip(a, b)]
 
-class MultiHeadAttention:
-    def __init__(self, embedding_dim, num_heads):
+def layer_norm(x, eps=1e-6):
+    normed = []
+    for vec in x:
+        mean = sum(vec) / len(vec)
+        var = sum((v - mean) ** 2 for v in vec) / len(vec)
+        normed.append([(v - mean) / math.sqrt(var + eps) for v in vec])
+    return normed
+
+def dropout(x, drop_prob=0.1):
+    # Simulate dropout by zeroing random elements
+    out = []
+    for vec in x:
+        out.append([xi if random.random() > drop_prob else 0.0 for xi in vec])
+    return out
+
+def gelu(x):
+    # Approximate GELU
+    return [0.5 * xi * (1 + math.tanh(math.sqrt(2 / math.pi) * (xi + 0.044715 * xi ** 3))) for xi in x]
+
+class MultiHeadSelfAttention:
+    def __init__(self, embedding_dim, num_heads, dropout_prob=0.1):
         self.embedding_dim = embedding_dim
         self.num_heads = num_heads
         self.head_dim = embedding_dim // num_heads
+        self.dropout_prob = dropout_prob
         self.Wq = [[random.uniform(-0.1, 0.1) for _ in range(embedding_dim)] for _ in range(embedding_dim)]
         self.Wk = [[random.uniform(-0.1, 0.1) for _ in range(embedding_dim)] for _ in range(embedding_dim)]
         self.Wv = [[random.uniform(-0.1, 0.1) for _ in range(embedding_dim)] for _ in range(embedding_dim)]
         self.Wo = [[random.uniform(-0.1, 0.1) for _ in range(embedding_dim)] for _ in range(embedding_dim)]
 
-    def split_heads(self, X):
-        return [[row[i*self.head_dim:(i+1)*self.head_dim] for row in X] for i in range(self.num_heads)]
+    def split_heads(self, x):
+        heads = []
+        for h in range(self.num_heads):
+            head = [vec[h*self.head_dim:(h+1)*self.head_dim] for vec in x]
+            heads.append(head)
+        return heads
 
-    def forward(self, X):
-        Q = matmul(X, self.Wq)
-        K = matmul(X, self.Wk)
-        V = matmul(X, self.Wv)
+    def combine_heads(self, heads):
+        seq_len = len(heads[0])
+        combined = []
+        for i in range(seq_len):
+            combined_vec = []
+            for h in range(self.num_heads):
+                combined_vec.extend(heads[h][i])
+            combined.append(combined_vec)
+        return combined
+
+    def attention(self, Q, K, V):
+        scores = []
+        for q in Q:
+            row = []
+            for k in K:
+                score = sum(qi * ki for qi, ki in zip(q, k)) / math.sqrt(len(q))
+                row.append(score)
+            row = softmax(row)
+            scores.append(row)
+        output = []
+        for i, row in enumerate(scores):
+            out = [0.0 for _ in V[0]]
+            for j, weight in enumerate(row):
+                out = [o + weight * v for o, v in zip(out, V[j])]
+            output.append(out)
+        return output
+
+    def forward(self, x):
+        Q = matmul(x, self.Wq)
+        K = matmul(x, self.Wk)
+        V = matmul(x, self.Wv)
         Q_heads = self.split_heads(Q)
         K_heads = self.split_heads(K)
         V_heads = self.split_heads(V)
-        head_outputs = [scaled_dot_product_attention(Q_heads[i], K_heads[i], V_heads[i]) for i in range(self.num_heads)]
-        concat_output = [sum(parts, []) for parts in zip(*head_outputs)]
-        return matmul(concat_output, self.Wo)
+        out_heads = []
+        for h in range(self.num_heads):
+            out = self.attention(Q_heads[h], K_heads[h], V_heads[h])
+            out = dropout(out, self.dropout_prob)
+            out_heads.append(out)
+        combined = self.combine_heads(out_heads)
+        output = matmul(combined, self.Wo)
+        output = dropout(output, self.dropout_prob)
+        return output
 
-def feedforward(X, hidden_dim):
-    out1 = [[max(0, val) for val in row] for row in X]  # ReLU
-    return out1
+class FeedForward:
+    def __init__(self, embedding_dim, hidden_dim, activation="gelu", dropout_prob=0.1):
+        self.W1 = [[random.uniform(-0.1, 0.1) for _ in range(hidden_dim)] for _ in range(embedding_dim)]
+        self.b1 = [0.0 for _ in range(hidden_dim)]
+        self.W2 = [[random.uniform(-0.1, 0.1) for _ in range(embedding_dim)] for _ in range(hidden_dim)]
+        self.b2 = [0.0 for _ in range(embedding_dim)]
+        self.activation = activation
+        self.dropout_prob = dropout_prob
 
-def layer_norm(X):
-    normalized = []
-    for row in X:
-        mean = sum(row) / len(row)
-        var = sum((x - mean) ** 2 for x in row) / len(row)
-        normalized.append([(x - mean) / math.sqrt(var + 1e-6) for x in row])
-    return normalized
+    def relu(self, x):
+        return [max(0, xi) for xi in x]
 
-class TransformerBlock:
-    def __init__(self, embedding_dim, num_heads, ff_hidden_dim):
-        self.mha = MultiHeadAttention(embedding_dim, num_heads)
-        self.ff_hidden_dim = ff_hidden_dim
+    def forward(self, x):
+        out = []
+        for vec in x:
+            h = [sum(vec[i] * self.W1[i][j] for i in range(len(vec))) + self.b1[j] for j in range(len(self.b1))]
+            if self.activation == "gelu":
+                h = gelu(h)
+            else:
+                h = self.relu(h)
+            h = dropout([h], self.dropout_prob)[0]
+            o = [sum(h[i] * self.W2[i][j] for i in range(len(h))) + self.b2[j] for j in range(len(self.b2))]
+            o = dropout([o], self.dropout_prob)[0]
+            out.append(o)
+        return out
 
-    def forward(self, X):
-        attn_output = self.mha.forward(X)
-        X = add_matrices(X, attn_output)
-        X = layer_norm(X)
-        ff_output = feedforward(X, self.ff_hidden_dim)
-        X = add_matrices(X, ff_output)
-        X = layer_norm(X)
-        return X
-    
+class TransformerEncoderBlock:
+    def __init__(self, embedding_dim, num_heads, ff_hidden_dim, dropout_prob=0.1, activation="gelu"):
+        self.attn = MultiHeadSelfAttention(embedding_dim, num_heads, dropout_prob)
+        self.ff = FeedForward(embedding_dim, ff_hidden_dim, activation, dropout_prob)
 
+    def forward(self, x):
+        attn_out = self.attn.forward(x)
+        attn_out = add(x, attn_out)  # Residual
+        attn_out = layer_norm(attn_out)
+        ff_out = self.ff.forward(attn_out)
+        ff_out = add(attn_out, ff_out)  # Residual
+        ff_out = layer_norm(ff_out)
+        return ff_out
 
-def output_layer(X, vocab_size):
-    # Simple linear projection to vocab size
-    W_out = [[random.uniform(-0.1, 0.1) for _ in range(len(X[0]))] for _ in range(vocab_size)]
-    logits = matmul(X, transpose(W_out))
-    return logits  # shape: [sequence_length, vocab_size]
+class TransformerEncoder:
+    def __init__(self, num_layers, embedding_dim, num_heads, ff_hidden_dim, seq_len, dropout_prob=0.1, activation="gelu"):
+        self.layers = [TransformerEncoderBlock(embedding_dim, num_heads, ff_hidden_dim, dropout_prob, activation) for _ in range(num_layers)]
+        self.seq_len = seq_len
+        self.embedding_dim = embedding_dim
 
+    def forward(self, x):
+        pe = positional_encoding(self.seq_len, self.embedding_dim)
+        x = add(x, pe)
+        for layer in self.layers:
+            x = layer.forward(x)
+        return x
 
-# ---------------------------
-# Softmax + Loss
-# ---------------------------
-def softmax(logits):
-    probs = []
-    for row in logits:
-        exp_row = [math.exp(x) for x in row]
-        sum_exp = sum(exp_row)
-        probs.append([x / sum_exp for x in exp_row])
-    return probs
+class TransformerClassifier:
+    def __init__(self, num_layers, embedding_dim, num_heads, ff_hidden_dim, seq_len, num_classes, dropout_prob=0.1, activation="gelu"):
+        self.encoder = TransformerEncoder(num_layers, embedding_dim, num_heads, ff_hidden_dim, seq_len, dropout_prob, activation)
+        # Output layer weights
+        self.Wo = [[random.uniform(-0.1, 0.1) for _ in range(num_classes)] for _ in range(embedding_dim)]
+        self.bo = [0.0 for _ in range(num_classes)]
 
-
-def cross_entropy(probs, targets):
-    if len(targets) > len(probs):
-        targets = targets[:len(probs)]  # truncate
-    loss = 0
-    for i, target in enumerate(targets):
-        if target >= len(probs[i]):
-            raise ValueError(f"Target index {target} out of range for vocab size {len(probs[i])}")
-        loss -= math.log(probs[i][target] + 1e-9)
-    return loss / len(targets)
-
-import os
-from random import random
-from core.cleaner import Cleaner
-from core.tokenizer import Tokenizer
-from core.embedding import EmbeddingLayer, PositionalEncoding
-from core.transformer import TransformerBlock, cross_entropy, output_layer, softmax
-
-# -------------------- Example flow usage -------------------- #
-def main():
-    input_file = "data/input/userdata.txt"
-    output_dir = "data/output"
-    vocab_path = os.path.join(output_dir, "vocab.json")
-    
-    # Parameters
-    vocab_size = 30000
-    embedding_dim = 768
-    sequence_length = 1024
-    num_heads = 2
-    ff_hidden_dim = 32
-    lr = 0.01
-
-
-    # Ensure directories exist
-    os.makedirs("data/input", exist_ok=True)
-    os.makedirs("data/output", exist_ok=True)
-
-    # 1) Read and clean corpus
-    if not os.path.exists(input_file):
-        raise FileNotFoundError(f"{input_file} missing. Please create it and add some text.")
-
-    with open(input_file, 'r', encoding='utf-8') as f:
-        raw = f.read()
-
-    cleaner = Cleaner()
-    cleaned = cleaner.clean(raw)
-    token_lists = [[s for s in (list(word) + ['</w>'])] for word in cleaned.split()]
-
-    # 2) Train tokenizer
-    tokenizer = Tokenizer(output_dir=output_dir, vocab_size=vocab_size, use_byte_level=False)
-    merges, tokens = tokenizer.train(token_lists)
-    tokenizer.save()
-
-    # 3) Load tokenizer, encode new input
-    tokenizer.load()
-    text = "Can You Explain Kernel Trick In An SVM Algorithm"
-    expectoutput = "A Kernel Trick is a method where the Non-Linear data is projected onto a bigger dimension space in order to make it easy to classify the data where it can be linearly divided by a plane"
-    print("user input:", text)
-    ids, unknown = tokenizer.encode(text)
-
-    outputids, unknown = tokenizer.encode(expectoutput)
-
-    print("Token IDs:", ids)
-    print("Target IDs:", outputids)
-    # print("Unknown words:", unknown)
-
-    # 4) If unknown words found, you may retrain tokenizer & embeddings
-    if unknown:
-        with open(input_file, 'a', encoding='utf-8') as f:
-            f.write("\n" + " ".join(unknown))
-        merges2, tokens2 = tokenizer.train(
-            token_lists + [[s for s in list(w) + ['</w>']] for w in unknown])
-        tokenizer.save()
-
-    
-    # Initialize layers
-    embedding = EmbeddingLayer(vocab_size=len(tokenizer.vocab), embedding_dim=embedding_dim)
-    pos_encoder = PositionalEncoding(max_len=sequence_length, embedding_dim=embedding_dim)
-    block = TransformerBlock(embedding_dim, num_heads, ff_hidden_dim)
-
-    
-    # Example training data
-    token_ids = ids  # input
-    target_ids = outputids  # next-token targets
-
-    for epoch in range(10): # small number for demo    
-        # Forward pass
-        token_vectors = embedding.lookup(token_ids)
-        pos_vectors = [pos_encoder.get(i) for i in range(len(token_ids))]
-        input_vectors = pos_encoder.combine_embeddings(token_vectors, pos_vectors)
-        transformer_output = block.forward(input_vectors)
-        logits = output_layer(transformer_output, vocab_size)
+    def forward(self, x):
+        # x: [seq_len, embedding_dim]
+        encoded = self.encoder.forward(x)
+        # Pooling: mean over sequence
+        pooled = [sum(vec[i] for vec in encoded) / len(encoded) for i in range(len(encoded[0]))]
+        logits = [sum(pooled[i] * self.Wo[i][j] for i in range(len(pooled))) + self.bo[j] for j in range(len(self.bo))]
         probs = softmax(logits)
-
-        print("First token embedding (first 8 dims):", token_vectors[0][:8])
-        print("First positional encoding (first 8 dims):", pos_vectors[0][:8])
-        print("First combined input vector (first 8 dims):", input_vectors[0][:8])
-
-        # Compute loss
-        loss = cross_entropy(probs, target_ids)
-        print("Loss:", loss)
-
-        
-        # Simple gradient update for embeddings (not full backprop)
-        for i, token_id in enumerate(token_ids):
-            grad = [probs[i][target_ids[i]] - 1] * embedding_dim
-            embedding.update(token_id, grad, lr)
-
-
-    # 6) Save embeddings
-    embedding.save()
-    embedding.load()
-
-# --- NLP Utilities ---
-def cosine_similarity(vec1, vec2):
-    dot = sum(a * b for a, b in zip(vec1, vec2))
-    norm1 = sum(a * a for a in vec1) ** 0.5
-    norm2 = sum(b * b for b in vec2) ** 0.5
-    return dot / (norm1 * norm2) if norm1 and norm2 else 0.0
-
-def average_embedding(vectors):
-    return [sum(dim) / len(vectors) for dim in zip(*vectors)]
-
-
-if __name__ == "__main__":
-    main()
-
-output is :
-user input: Can You Explain Kernel Trick In An SVM Algorithm
-Token IDs: [127, 942, 268, 417, 870, 379, 34, 708, 27]
-Target IDs: [6, 417, 870, 2168, 945, 2371, 3500, 3247, 545, 0, 454, 1507, 2168, 2737, 2520, 945, 1211, 1579, 3093, 2101, 2531, 3295, 2305, 2177, 1651, 3295, 1344, 3247, 1507, 3500, 2177, 1265, 1179, 2261, 1609, 1251, 945, 2640]
-First token embedding (first 8 dims): [0.07067841915293585, 0.061835467683617, 0.026223428101916857, 0.04587185619263484, 0.08641746040299489, -0.002083741975675915, -0.00395466992455365, -0.09137184353418633]
-First positional encoding (first 8 dims): [0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0]
-First combined input vector (first 8 dims): [0.07067841915293585, 1.061835467683617, 0.026223428101916857, 1.0458718561926348, 0.08641746040299489, 0.997916258024324, -0.00395466992455365, 0.9086281564658136]
-Loss: 11.673992950043667
-First token embedding (first 8 dims): [0.08067810018614921, 0.07183514871683036, 0.036223109135130216, 0.0558715372258482, 0.09641714143620825, 0.007915939057537446, 0.006045011108659711, -0.08137216250097297]
-First positional encoding (first 8 dims): [0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0]
-First combined input vector (first 8 dims): [0.08067810018614921, 1.0718351487168303, 0.036223109135130216, 1.0558715372258483, 0.09641714143620825, 1.0079159390575374, 0.006045011108659711, 0.918627837499027]
-Loss: 11.203682997974518
-First token embedding (first 8 dims): [0.09067771304688169, 0.08183476157756284, 0.046222721995862685, 0.06587115008658068, 0.10641675429694072, 0.017915551918269917, 0.016044623969392182, -0.07137254964024049]
-First positional encoding (first 8 dims): [0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0]
-First combined input vector (first 8 dims): [0.09067771304688169, 1.0818347615775628, 0.046222721995862685, 1.0658711500865807, 0.10641675429694072, 1.0179155519182699, 0.016044623969392182, 0.9286274503597595]
-Loss: 11.330404012516325
-First token embedding (first 8 dims): [0.10067738099340069, 0.09183442952408184, 0.056222389942381684, 0.07587081803309968, 0.11641642224345973, 0.02791521986478892, 0.026044291915911184, -0.06137288169372149]
-First positional encoding (first 8 dims): [0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0]
-First combined input vector (first 8 dims): [0.10067738099340069, 1.0918344295240818, 0.056222389942381684, 1.0758708180330996, 0.11641642224345973, 1.027915219864789, 0.026044291915911184, 0.9386271183062785]
-Loss: 12.643486540340374
-First token embedding (first 8 dims): [0.11067731647301067, 0.10183436500369182, 0.06622232542199166, 0.08587075351270966, 0.12641635772306972, 0.0379151553443989, 0.03604422739552116, -0.05137294621411151]
-First positional encoding (first 8 dims): [0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0]
-First combined input vector (first 8 dims): [0.11067731647301067, 1.101834365003692, 0.06622232542199166, 1.0858707535127097, 0.12641635772306972, 1.0379151553443988, 0.03604422739552116, 0.9486270537858885]
-Loss: 11.667345949887508
-First token embedding (first 8 dims): [0.12067726840633339, 0.11183431693701454, 0.0762222773553144, 0.09587070544603238, 0.13641630965639245, 0.04791510727772162, 0.04604417932884389, -0.041372994280788784]
-First positional encoding (first 8 dims): [0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0]
-First combined input vector (first 8 dims): [0.12067726840633339, 1.1118343169370146, 0.0762222773553144, 1.0958707054460324, 0.13641630965639245, 1.0479151072777215, 0.04604417932884389, 0.9586270057192112]
-Loss: 10.696778596855067
-First token embedding (first 8 dims): [0.13067710019648182, 0.12183414872716297, 0.08622210914546283, 0.10587053723618081, 0.1464161414465409, 0.05791493906787006, 0.05604401111899233, -0.031373162490640344]
-First positional encoding (first 8 dims): [0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0]
-First combined input vector (first 8 dims): [0.13067710019648182, 1.121834148727163, 0.08622210914546283, 1.1058705372361808, 0.1464161414465409, 1.0579149390678702, 0.05604401111899233, 0.9686268375093596]
-Loss: 11.622186500421511
-First token embedding (first 8 dims): [0.14067708013650063, 0.13183412866718178, 0.09622208908548163, 0.11587051717619962, 0.1564161213865597, 0.06791491900788887, 0.06604399105901114, -0.02137318255062154]
-First positional encoding (first 8 dims): [0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0]
-First combined input vector (first 8 dims): [0.14067708013650063, 1.1318341286671818, 0.09622208908548163, 1.1158705171761996, 0.1564161213865597, 1.067914919007889, 0.06604399105901114, 0.9786268174493784]
-Loss: 11.230007630269096
-First token embedding (first 8 dims): [0.15067701679079643, 0.14183406532147758, 0.10622202573977743, 0.12587045383049542, 0.1664160580408555, 0.07791485566218467, 0.07604392771330694, -0.011373245896325736]
-First positional encoding (first 8 dims): [0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0]
-First combined input vector (first 8 dims): [0.15067701679079643, 1.1418340653214776, 0.10622202573977743, 1.1258704538304953, 0.1664160580408555, 1.0779148556621847, 0.07604392771330694, 0.9886267541036743]
-Loss: 11.63767992592659
-First token embedding (first 8 dims): [0.16067679749686223, 0.15183384602754338, 0.11622180644584325, 0.13587023453656122, 0.1764158387469213, 0.08791463636825049, 0.08604370841937276, -0.001373465190259925]
-First positional encoding (first 8 dims): [0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0]
-First combined input vector (first 8 dims): [0.16067679749686223, 1.1518338460275435, 0.11622180644584325, 1.1358702345365612, 0.1764158387469213, 1.0879146363682506, 0.08604370841937276, 0.9986265348097401]
-Loss: 11.863914930614108
+        return probs
