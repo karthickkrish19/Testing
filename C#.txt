@@ -1,0 +1,356 @@
+using LLM_Module.core;
+using System;
+using System.IO;
+using System.Text;
+
+namespace LLM_Module
+{
+    internal class Program
+    {
+        static void Main(string[] args)
+        {
+            int vocabsize = 50000;
+            int embeddingDim = 64;
+            int maxSeqLen = 20;
+            int numLayers = 2;
+            int numHeads = 4;
+            int ffHiddenDim = 128;
+
+
+            // Base directory where the executable runs
+            string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+            string projectRoot = Path.GetFullPath(Path.Combine(baseDir, @"..\..\.."));
+            string dirPath = Path.Combine(projectRoot, "data", "input");
+            string filePath = Path.Combine(dirPath, "sampledata.txt");
+            try
+            {
+                //Step 1: Train tokenizer
+                string rawdata = File.ReadAllText(filePath);
+                CleanAlgorithum ca = new CleanAlgorithum();
+                Console.WriteLine("Clean loaded....");
+                string cleandata = ca.Clean(rawdata);
+                // Split into words and wrap in a list of lists
+                var tokenLists = cleandata
+                    .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(word => word.ToCharArray().Select(c => c.ToString()).ToList())
+                    .ToList();
+
+
+                My_Tokenizer my_Tokenizer = new My_Tokenizer(Path.Combine(projectRoot, "data", "output"), vocabsize);
+                my_Tokenizer.TrainTokenizer(tokenLists);
+                my_Tokenizer.Save();
+
+                //Step 2: Load the tokenizer
+                string inputtxt = "What is Python used for ?";
+                string cleanuserdata = ca.Clean(inputtxt);
+                My_Tokenizer my_Tokenizer1 = new My_Tokenizer(Path.Combine(projectRoot, "data", "output"), vocabsize);
+                my_Tokenizer1.Load();
+                var (tokenid, textdata) = my_Tokenizer1.Encode(cleanuserdata);
+                var filtertoken = tokenid.Where(x => x != 4).ToList();
+                Console.WriteLine($"Encode Token Id is : {string.Join(", ", filtertoken)}");
+                var decodedtxt = my_Tokenizer1.Decode(tokenid);
+                Console.WriteLine($"Decode Text is : {decodedtxt}");
+
+                //Console.WriteLine($"Final combined embeddings shape: {finalEmbeddings.Count} x {finalEmbeddings[0].Count}");
+                var model = new GPTModel(my_Tokenizer1.actualvocabsize(), embeddingDim, maxSeqLen, numLayers, numHeads, ffHiddenDim);
+                
+                // Training loop skeleton
+                for (int epoch = 0; epoch < 5; epoch++)
+                {
+                    var logits = model.Forward(filtertoken);
+                    double loss = Utils.CrossEntropyLoss(logits, filtertoken);
+                    Console.WriteLine($"Epoch {epoch}, Loss: {loss}");
+                    // Backpropagation and parameter updates would go here (manual gradient calc)
+
+                    // Simplified SGD update for output layer
+                    double lr = 0.01;
+                    for (int i = 0; i < logits.Count; i++)
+                    {
+                        var probs = Utils.Softmax(logits[i]);
+                        for (int j = 0; j < probs.Count; j++)
+                        {
+                            double grad = probs[j] - (filtertoken[i] == j ? 1 : 0);
+                            for (int k = 0; k < model.outputLayer.Count; k++)
+                            {
+                                model.outputLayer[k][j] -= lr * grad * logits[i][k];
+                            }
+                        }
+                    }
+                }
+
+                Console.ReadKey();
+            }
+            catch(Exception ex)
+            {
+                Console.WriteLine(ex.ToString());
+            }
+        }
+
+        public static string ReadFile(string filePath)
+        {
+            if (!File.Exists(filePath))
+            {
+                throw new FileNotFoundException($"File not found: {filePath}");
+            }
+            return File.ReadAllText(filePath, Encoding.UTF8);
+        }
+    }    
+}
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading.Tasks;
+
+namespace LLM_Module.core
+{
+    public class CleanAlgorithum
+    {
+        public string Clean(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+                return string.Empty;
+
+            // Remove HTML tags
+            text = Regex.Replace(text, "<.*?>", string.Empty);
+
+            // Remove URLs
+            text = Regex.Replace(text, @"https?://\S+|www\.\S+", string.Empty);
+
+            // Keep only ASCII characters
+            text = System.Text.Encoding.ASCII.GetString(System.Text.Encoding.ASCII.GetBytes(text));
+
+            // Remove punctuation
+            //text = Regex.Replace(text, @"[^\w\s]", string.Empty);
+            text = Regex.Replace(text, @"[^\w\s\.,?!]", string.Empty);
+
+            // Remove digits
+            text = Regex.Replace(text, @"\d+", string.Empty);
+
+            // Normalize spaces and convert to lowercase
+            text = Regex.Replace(text, @"\s+", " ").Trim().ToLower();
+
+            return text;
+        }
+
+    }
+}
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace LLM_Module.core
+{
+    //internal class My_Transformer
+    //{
+    //}
+    public static class Utils
+    {
+        public static List<double> Softmax(List<double> x)
+        {
+            double maxVal = x.Max();
+            var expVals = x.Select(i => Math.Exp(i - maxVal)).ToList();
+            double sumExp = expVals.Sum();
+            return expVals.Select(i => i / sumExp).ToList();
+        }
+
+        public static double CrossEntropyLoss(List<List<double>> logits, List<int> targets)
+        {
+            double loss = 0.0;
+            for (int i = 0; i < logits.Count; i++)
+            {
+                var probs = Softmax(logits[i]);
+                loss -= Math.Log(probs[targets[i]] + 1e-9);
+            }
+            return loss / targets.Count;
+        }
+
+        public static List<double> AddVectors(List<double> a, List<double> b)
+        {
+            return a.Zip(b, (x, y) => x + y).ToList();
+        }
+
+        public static List<double> LayerNorm(List<double> x)
+        {
+            double mean = x.Average();
+            double var = x.Select(xi => (xi - mean) * (xi - mean)).Average();
+            return x.Select(xi => (xi - mean) / Math.Sqrt(var + 1e-6)).ToList();
+        }
+
+        public static List<List<double>> MatMul(List<List<double>> A, List<List<double>> B)
+        {
+            int rowsA = A.Count, colsA = A[0].Count;
+            int rowsB = B.Count, colsB = B[0].Count;
+            if (colsA != rowsB) throw new Exception("Matrix dimensions mismatch");
+            var result = new List<List<double>>(rowsA);
+            for (int i = 0; i < rowsA; i++)
+            {
+                var row = new List<double>(colsB);
+                for (int j = 0; j < colsB; j++)
+                {
+                    double sum = 0;
+                    for (int k = 0; k < colsA; k++)
+                        sum += A[i][k] * B[k][j];
+                    row.Add(sum);
+                }
+                result.Add(row);
+            }
+            return result;
+        }
+
+        public static List<List<double>> Transpose(List<List<double>> M)
+        {
+            int rows = M.Count, cols = M[0].Count;
+            var result = new List<List<double>>(cols);
+            for (int i = 0; i < cols; i++)
+            {
+                var row = new List<double>(rows);
+                for (int j = 0; j < rows; j++)
+                    row.Add(M[j][i]);
+                result.Add(row);
+            }
+            return result;
+        }
+
+        public static List<List<double>> InitMatrix(int rows, int cols)
+        {
+            var rand = new Random();
+            var mat = new List<List<double>>(rows);
+            for (int i = 0; i < rows; i++)
+            {
+                var row = new List<double>(cols);
+                for (int j = 0; j < cols; j++)
+                    row.Add(rand.NextDouble() * 0.2 - 0.1);
+                mat.Add(row);
+            }
+            return mat;
+        }
+    }
+
+    public class EmbeddingLayer
+    {
+        public List<List<double>> embeddings;
+        public EmbeddingLayer(int vocabSize, int embeddingDim)
+        {
+            embeddings = Utils.InitMatrix(vocabSize, embeddingDim);
+        }
+        public List<List<double>> Lookup(List<int> tokenIds)
+        {
+            return tokenIds.Select(id => new List<double>(embeddings[id])).ToList();
+        }
+    }
+
+    public class PositionalEncoding
+    {
+        private List<List<double>> encoding;
+        public PositionalEncoding(int maxLen, int embeddingDim)
+        {
+            encoding = new List<List<double>>(maxLen);
+            for (int pos = 0; pos < maxLen; pos++)
+            {
+                var row = new List<double>(embeddingDim);
+                for (int i = 0; i < embeddingDim; i++)
+                {
+                    double angle = pos / Math.Pow(10000, (2 * (i / 2)) / (double)embeddingDim);
+                    row.Add(i % 2 == 0 ? Math.Sin(angle) : Math.Cos(angle));
+                }
+                encoding.Add(row);
+            }
+        }
+        public List<double> Get(int position) => encoding[position];
+    }
+
+    public class MultiHeadAttention
+    {
+        private int embeddingDim, numHeads;
+        public List<List<double>> Wq, Wk, Wv, Wo;
+        public MultiHeadAttention(int embeddingDim, int numHeads)
+        {
+            this.embeddingDim = embeddingDim;
+            this.numHeads = numHeads;
+            Wq = Utils.InitMatrix(embeddingDim, embeddingDim);
+            Wk = Utils.InitMatrix(embeddingDim, embeddingDim);
+            Wv = Utils.InitMatrix(embeddingDim, embeddingDim);
+            Wo = Utils.InitMatrix(embeddingDim, embeddingDim);
+        }
+        public List<List<double>> Forward(List<List<double>> X)
+        {
+            var Q = Utils.MatMul(X, Wq);
+            var K = Utils.MatMul(X, Wk);
+            var V = Utils.MatMul(X, Wv);
+            var scores = Utils.MatMul(Q, Utils.Transpose(K));
+            for (int i = 0; i < scores.Count; i++)
+                for (int j = 0; j < scores[i].Count; j++)
+                    scores[i][j] /= Math.Sqrt(embeddingDim);
+            var attnWeights = scores.Select(row => Utils.Softmax(row)).ToList();
+            var context = Utils.MatMul(attnWeights, V);
+            return Utils.MatMul(context, Wo);
+        }
+    }
+
+    public class FeedForward
+    {
+        public List<List<double>> W1, W2;
+        public FeedForward(int embeddingDim, int hiddenDim)
+        {
+            W1 = Utils.InitMatrix(embeddingDim, hiddenDim);
+            W2 = Utils.InitMatrix(hiddenDim, embeddingDim);
+        }
+        public List<List<double>> Forward(List<List<double>> X)
+        {
+            var hidden = X.Select(row => W1[0].Select((_, j) =>
+            {
+                double sum = 0;
+                for (int k = 0; k < row.Count; k++) sum += row[k] * W1[k][j];
+                return Math.Max(0, sum);
+            }).ToList()).ToList();
+            return Utils.MatMul(hidden, W2);
+        }
+    }
+
+    public class TransformerBlock
+    {
+        private MultiHeadAttention attention;
+        private FeedForward ff;
+        public TransformerBlock(int embeddingDim, int numHeads, int ffHiddenDim)
+        {
+            attention = new MultiHeadAttention(embeddingDim, numHeads);
+            ff = new FeedForward(embeddingDim, ffHiddenDim);
+        }
+        public List<List<double>> Forward(List<List<double>> X)
+        {
+            var attnOut = attention.Forward(X);
+            X = X.Zip(attnOut, (a, b) => Utils.LayerNorm(Utils.AddVectors(a, b))).ToList();
+            var ffOut = ff.Forward(X);
+            X = X.Zip(ffOut, (a, b) => Utils.LayerNorm(Utils.AddVectors(a, b))).ToList();
+            return X;
+        }
+    }
+
+    public class GPTModel
+    {
+        public EmbeddingLayer embedding;
+        private PositionalEncoding posEncoding;
+        private List<TransformerBlock> blocks;
+        public List<List<double>> outputLayer;
+        public GPTModel(int vocabSize, int embeddingDim, int maxSeqLen, int numLayers, int numHeads, int ffHiddenDim)
+        {
+            embedding = new EmbeddingLayer(vocabSize, embeddingDim);
+            posEncoding = new PositionalEncoding(maxSeqLen, embeddingDim);
+            blocks = Enumerable.Range(0, numLayers).Select(_ => new TransformerBlock(embeddingDim, numHeads, ffHiddenDim)).ToList();
+            outputLayer = Utils.InitMatrix(embeddingDim, vocabSize);
+        }
+        public List<List<double>> Forward(List<int> tokenIds)
+        {
+            var X = embedding.Lookup(tokenIds);
+            for (int i = 0; i < tokenIds.Count; i++)
+                X[i] = Utils.AddVectors(X[i], posEncoding.Get(i));
+            foreach (var block in blocks)
+                X = block.Forward(X);
+            return Utils.MatMul(X, outputLayer);
+        }
+    }
+}
