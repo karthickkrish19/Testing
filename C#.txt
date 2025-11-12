@@ -96,46 +96,240 @@ namespace LLM_Module
         }
     }    
 }
+
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
-using System.Text.RegularExpressions;
+using System.Text.Json;
 using System.Threading.Tasks;
 
 namespace LLM_Module.core
 {
-    public class CleanAlgorithum
+    public class My_Tokenizer
     {
-        public string Clean(string text)
+        private string outputdir;
+        private int vocab_Size;
+        private List<string> spcial_Tokenizer = new List<string> { "<unk>", "<pad>", "<bos>", "<eos>", "</w>" };
+        private Dictionary<string, int> vocab = new Dictionary<string, int>();
+        private Dictionary<int, string> idToToken = new Dictionary<int, string>();
+        private List<(string,string)> bpeMerges = new List<(string,string)>();
+        private Dictionary<(string,string),int> bpeRanks = new Dictionary<(string,string),int>();
+
+        public My_Tokenizer(string outputdir, int vocab_Size)
         {
-            if (string.IsNullOrEmpty(text))
-                return string.Empty;
-
-            // Remove HTML tags
-            text = Regex.Replace(text, "<.*?>", string.Empty);
-
-            // Remove URLs
-            text = Regex.Replace(text, @"https?://\S+|www\.\S+", string.Empty);
-
-            // Keep only ASCII characters
-            text = System.Text.Encoding.ASCII.GetString(System.Text.Encoding.ASCII.GetBytes(text));
-
-            // Remove punctuation
-            //text = Regex.Replace(text, @"[^\w\s]", string.Empty);
-            text = Regex.Replace(text, @"[^\w\s\.,?!]", string.Empty);
-
-            // Remove digits
-            text = Regex.Replace(text, @"\d+", string.Empty);
-
-            // Normalize spaces and convert to lowercase
-            text = Regex.Replace(text, @"\s+", " ").Trim().ToLower();
-
-            return text;
+            this.outputdir = outputdir;
+            this.vocab_Size = vocab_Size;
+            Directory.CreateDirectory(this.outputdir);
         }
 
+        public (List<(string,string)>, HashSet<string>) TrainTokenizer(List<List<string>> tokenList)
+        {
+            var merges = new List<(string, string)>();
+            var tokenSet = new HashSet<string>();
+            var corpus = tokenList;
+            while (tokenSet.Count < vocab_Size)
+            {
+                var pairFreqs = GetPairFrequencies(corpus);
+                if (pairFreqs.Count == 0)
+                    break;
+                var mostFreqs = pairFreqs.OrderByDescending(kv => kv.Value).First().Key;
+                merges.Add(mostFreqs);
+                corpus = MergePair(mostFreqs, corpus);
+                foreach(var word in corpus)
+                {
+                    foreach(var token in word)
+                    {
+                        tokenSet.Add(token);
+                    }
+                }
+                if (tokenSet.Count >= vocab_Size) 
+                    break;
+            }
+
+            bpeMerges = merges;
+            var fullVocab = spcial_Tokenizer.Concat(tokenSet.OrderBy(t => t)).ToList();
+            this.vocab = fullVocab.Select((tok, idx) => new { tok, idx }).ToDictionary(x => x.tok, x => x.idx);
+            idToToken = this.vocab.ToDictionary(kvp => kvp.Value, kvp => kvp.Key);
+            bpeRanks = merges.Select((m, i) => new { m, i }).ToDictionary(x => x.m, x => x.i);
+            return (merges, tokenSet);
+        }
+
+        public void Save()
+        {
+            var options = new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+            };
+            File.WriteAllText(Path.Combine(outputdir, "vocab.json"), JsonSerializer.Serialize(vocab, options));
+            using (var writer = new StreamWriter(Path.Combine(outputdir, "merges.txt")))
+            {
+                writer.WriteLine("#version:0.2");
+                foreach (var merge in bpeMerges)
+                {
+                    writer.WriteLine($"{merge.Item1} {merge.Item2}");
+                }
+            }
+
+        }
+
+        public void Load()
+        {
+            vocab = JsonSerializer.Deserialize<Dictionary<string, int>>(File.ReadAllText(Path.Combine(outputdir, "vocab.json")));
+            idToToken = vocab.ToDictionary(kvp => kvp.Value, kvp => kvp.Key);
+
+            var lines = File.ReadAllLines(Path.Combine(outputdir, "merges.txt")).Skip(1);
+            bpeMerges = lines.Select(line => {
+                var parts = line.Split(' ');
+                return (parts[0], parts[1]);
+            }).ToList();
+
+            bpeRanks = bpeMerges.Select((m, i) => new { m, i }).ToDictionary(x => x.m, x => x.i);
+        }
+
+        public (List<int>, List<string>) Encode(string text)
+        {
+            var tokenIds = new List<int>();
+            var unknown = new List<string>();
+
+            foreach (var word in text.Trim().Split(' '))
+            {
+                var tokens = InitialTokens(word);
+                var subtoks = ApplyMerges(tokens);
+                bool wordUnknown = false;
+
+                foreach (var tok in subtoks)
+                {
+                    if (vocab.ContainsKey(tok))
+                    {
+                        tokenIds.Add(vocab[tok]);
+                    }
+                    else
+                    {
+                        wordUnknown = true;
+                        tokenIds.Add(vocab.ContainsKey("<unk>") ? vocab["<unk>"] : 0);
+                    }
+                }
+                if (wordUnknown) unknown.Add(word);
+            }
+            return (tokenIds, unknown);
+        }
+
+        public string Decode(List<int> tokenIds)
+        {
+            var tokens = tokenIds.Select(id => idToToken.ContainsKey(id) ? idToToken[id] : "<unk>").ToList();
+            var words = new List<string>();
+            string cur = "";
+
+            foreach (var tok in tokens)
+            {
+                if (tok.EndsWith("</w>"))
+                {
+                    cur += tok.Substring(0, tok.Length - "</w>".Length);
+                    words.Add(cur);
+                    cur = "";
+                }
+                else if (tok == "<eos>")
+                {
+                    break;
+                }
+                else
+                {
+                    cur += tok;
+                }
+            }
+            if (!string.IsNullOrEmpty(cur)) words.Add(cur);
+
+            return string.Join(" ", words);
+        }
+
+        private List<string> ApplyMerges(List<string> tokens)
+        {
+            while (true)
+            {
+                var pairs = Enumerable.Range(0, tokens.Count - 1).Select(i => (tokens[i], tokens[i + 1])).ToList();
+                if (!pairs.Any()) break;
+
+                var ranked = pairs.Select(pair => (pair, bpeRanks.ContainsKey(pair) ? bpeRanks[pair] : int.MaxValue)).ToList();
+                if (ranked.All(x => x.Item2 == int.MaxValue)) break;
+
+                var bestPair = ranked.OrderBy(x => x.Item2).First().Item1;
+                var newTokens = new List<string>();
+                int i = 0;
+                while (i < tokens.Count)
+                {
+                    if (i < tokens.Count - 1 && (tokens[i], tokens[i + 1]) == bestPair)
+                    {
+                        newTokens.Add(tokens[i] + tokens[i + 1]);
+                        i += 2;
+                    }
+                    else
+                    {
+                        newTokens.Add(tokens[i]);
+                        i++;
+                    }
+                }
+                tokens = newTokens;
+            }
+            return tokens;
+        }
+
+        private List<List<string>> MergePair((string,string) pair, List<List<string>> corpus)
+        {
+            var newCorpus = new List<List<string>>();
+            var bigram = pair.Item1 + pair.Item2;
+            foreach (var word in corpus)
+            {
+                var newWord = new List<string>();
+                int i = 0;
+                while (i < word.Count)
+                {
+                    if (i < word.Count - 1 && (word[i], word[i + 1]) == pair)
+                    {
+                        newWord.Add(bigram);
+                        i += 2;
+                    }
+                    else
+                    {
+                        newWord.Add(word[i]);
+                        i++;
+                    }
+                }
+                newCorpus.Add(newWord);
+            }
+            return newCorpus;
+        }
+
+        private Dictionary<(string,string),int> GetPairFrequencies(List<List<string>> corpus)
+        {
+            var pairs = new Dictionary<(string, string), int>();
+            foreach (var word in corpus)
+            {
+                for(int i=0;i< word.Count - 1; i++)
+                {
+                    var pair = (word[i], word[i + 1]);
+                    if (!pairs.ContainsKey(pair)) pairs[pair] = 0;
+                    pairs[pair] += 1;
+                }
+            }
+            return pairs;
+        }
+
+        private List<string> InitialTokens(string word)
+        {
+            var tokens = word.ToCharArray().Select(x => x.ToString()).ToList();
+            tokens.Add("</w>");
+            return tokens;
+        }
+
+        public int actualvocabsize()
+        {
+            return vocab.Count();
+        }
     }
 }
+
 using System;
 using System.Collections.Generic;
 using System.Linq;
