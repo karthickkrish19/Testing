@@ -1,0 +1,303 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace TinyLLM
+{
+    // ----------------------------
+    // Tokenizer Class
+    // ----------------------------
+    class Tokenizer
+    {
+        public Dictionary<string, int> vocab = new Dictionary<string, int>();
+        public Dictionary<int, string> invVocab = new Dictionary<int, string>();
+
+        public Tokenizer(List<string> words)
+        {
+            for (int i = 0; i < words.Count; i++)
+            {
+                vocab[words[i]] = i;
+                invVocab[i] = words[i];
+            }
+        }
+
+        public int[] Encode(string text)
+        {
+            var tokens = text.ToLower().Split(' ');
+            int[] ids = new int[tokens.Length];
+            for (int i = 0; i < tokens.Length; i++)
+                ids[i] = vocab.ContainsKey(tokens[i]) ? vocab[tokens[i]] : vocab["[UNK]"];
+            return ids;
+        }
+
+        public string Decode(int[] ids)
+        {
+            string[] tokens = new string[ids.Length];
+            for (int i = 0; i < ids.Length; i++)
+                tokens[i] = invVocab.ContainsKey(ids[i]) ? invVocab[ids[i]] : "[UNK]";
+            return string.Join(" ", tokens);
+        }
+    }
+
+    // ----------------------------
+    // Embedding Class
+    // ----------------------------
+    class Embedding
+    {
+        private static Random rnd = new Random();
+        public int VocabSize { get; private set; }
+        public int EmbeddingDim { get; private set; }
+        public double[,] embeddings;
+
+        public Embedding(int vocabSize, int embeddingDim)
+        {
+            VocabSize = vocabSize;
+            EmbeddingDim = embeddingDim;
+            embeddings = RandMatrix(VocabSize, EmbeddingDim, 0.01);
+        }
+
+        private double[,] RandMatrix(int rows, int cols, double scale)
+        {
+            double[,] m = new double[rows, cols];
+            for (int i = 0; i < rows; i++)
+                for (int j = 0; j < cols; j++)
+                    m[i, j] = (rnd.NextDouble() * 2 - 1) * scale;
+            return m;
+        }
+
+        public double[] Embed(int tokenId)
+        {
+            double[] vec = new double[EmbeddingDim];
+            for (int i = 0; i < EmbeddingDim; i++)
+                vec[i] = embeddings[tokenId, i];
+            return vec;
+        }
+
+        public double[] AddPositionalEncoding(double[] x, int pos)
+        {
+            double[] y = new double[x.Length];
+            for (int i = 0; i < x.Length; i++)
+            {
+                if (i % 2 == 0)
+                    y[i] = x[i] + Math.Sin(pos / Math.Pow(10000, i / (double)x.Length));
+                else
+                    y[i] = x[i] + Math.Cos(pos / Math.Pow(10000, (i - 1) / (double)x.Length));
+            }
+            return y;
+        }
+    }
+
+    // ----------------------------
+    // Transformer Class
+    // ----------------------------
+    class Transformer
+    {
+        private static Random rnd = new Random();
+
+        public int NumLayers { get; private set; }
+        public int EmbeddingDim { get; private set; }
+        public int VocabSize { get; private set; }
+
+        public double[,] Wout;
+        public double[] Bout;
+
+        public double[][,] Wq, Wk, Wv;
+        public double[][,] Wff1, Wff2;
+        public double[][,] Bq, Bk, Bv;
+        public double[][,] Bff1, Bff2;
+
+        public Transformer(int vocabSize, int embeddingDim, int numLayers)
+        {
+            VocabSize = vocabSize;
+            EmbeddingDim = embeddingDim;
+            NumLayers = numLayers;
+
+            Wq = new double[numLayers][,];
+            Wk = new double[numLayers][,];
+            Wv = new double[numLayers][,];
+            Wff1 = new double[numLayers][,];
+            Wff2 = new double[numLayers][,];
+            Bq = new double[numLayers][,];
+            Bk = new double[numLayers][,];
+            Bv = new double[numLayers][,];
+            Bff1 = new double[numLayers][,];
+            Bff2 = new double[numLayers][,];
+
+            for (int l = 0; l < numLayers; l++)
+            {
+                Wq[l] = RandMatrix(embeddingDim, embeddingDim, 0.01);
+                Wk[l] = RandMatrix(embeddingDim, embeddingDim, 0.01);
+                Wv[l] = RandMatrix(embeddingDim, embeddingDim, 0.01);
+                Wff1[l] = RandMatrix(embeddingDim, embeddingDim, 0.01);
+                Wff2[l] = RandMatrix(embeddingDim, embeddingDim, 0.01);
+                Bq[l] = new double[1, embeddingDim];
+                Bk[l] = new double[1, embeddingDim];
+                Bv[l] = new double[1, embeddingDim];
+                Bff1[l] = new double[1, embeddingDim];
+                Bff2[l] = new double[1, embeddingDim];
+            }
+
+            Wout = RandMatrix(embeddingDim, vocabSize, 0.01);
+            Bout = new double[vocabSize];
+        }
+
+        private double[,] RandMatrix(int rows, int cols, double scale)
+        {
+            double[,] m = new double[rows, cols];
+            for (int i = 0; i < rows; i++)
+                for (int j = 0; j < cols; j++)
+                    m[i, j] = (rnd.NextDouble() * 2 - 1) * scale;
+            return m;
+        }
+
+        private double[] MatVecMul(double[,] W, double[] x)
+        {
+            int rows = W.GetLength(0), cols = W.GetLength(1);
+            double[] y = new double[cols];
+            for (int j = 0; j < cols; j++)
+                for (int i = 0; i < rows; i++)
+                    y[j] += x[i] * W[i, j];
+            return y;
+        }
+
+        private double[] AddVectors(double[] a, double[] b)
+        {
+            double[] c = new double[a.Length];
+            for (int i = 0; i < a.Length; i++)
+                c[i] = a[i] + b[i];
+            return c;
+        }
+
+        private double[] ReLU(double[] x)
+        {
+            double[] y = new double[x.Length];
+            for (int i = 0; i < x.Length; i++)
+                y[i] = Math.Max(0, x[i]);
+            return y;
+        }
+
+        private double[] LayerNorm(double[] x)
+        {
+            double mean = x.Average();
+            double std = Math.Sqrt(x.Select(v => (v - mean) * (v - mean)).Average() + 1e-6);
+            double[] y = new double[x.Length];
+            for (int i = 0; i < x.Length; i++)
+                y[i] = (x[i] - mean) / std;
+            return y;
+        }
+
+        private double[] Softmax(double[] logits)
+        {
+            double max = logits.Max();
+            double sum = 0;
+            double[] exps = new double[logits.Length];
+            for (int i = 0; i < logits.Length; i++)
+            {
+                exps[i] = Math.Exp(logits[i] - max);
+                sum += exps[i];
+            }
+            for (int i = 0; i < logits.Length; i++)
+                exps[i] /= sum;
+            return exps;
+        }
+
+        private int ArgMax(double[] arr)
+        {
+            int idx = 0; double max = arr[0];
+            for (int i = 1; i < arr.Length; i++)
+                if (arr[i] > max) { max = arr[i]; idx = i; }
+            return idx;
+        }
+
+        private double[] SelfAttention(double[] x, int layer)
+        {
+            double[] q = MatVecMul(Wq[layer], x);
+            double[] k = MatVecMul(Wk[layer], x);
+            double[] v = MatVecMul(Wv[layer], x);
+
+            double score = 0;
+            for (int i = 0; i < EmbeddingDim; i++)
+                score += q[i] * k[i];
+
+            score /= Math.Sqrt(EmbeddingDim);
+
+            double[] outVec = new double[EmbeddingDim];
+            for (int i = 0; i < EmbeddingDim; i++)
+                outVec[i] = v[i] * score;
+
+            return outVec;
+        }
+
+        private double[] FeedForwardBlock(double[] x, int layer)
+        {
+            double[] h = AddVectors(MatVecMul(Wff1[layer], x), Bff1[layer].Cast<double>().ToArray());
+            h = ReLU(h);
+            double[] outVec = AddVectors(MatVecMul(Wff2[layer], h), Bff2[layer].Cast<double>().ToArray());
+            return outVec;
+        }
+
+        private double[] TransformerLayer(double[] x, int layer)
+        {
+            double[] attn = SelfAttention(x, layer);
+            double[] ff = FeedForwardBlock(attn, layer);
+            double[] outVec = LayerNorm(AddVectors(attn, ff));
+            return outVec;
+        }
+
+        private double[] TransformerStack(double[] x)
+        {
+            double[] h = x;
+            for (int l = 0; l < NumLayers; l++)
+                h = TransformerLayer(h, l);
+            return h;
+        }
+
+        public double[] Forward(double[] x)
+        {
+            double[] context = TransformerStack(x);
+            double[] logits = AddVectors(MatVecMul(Wout, context), Bout);
+            return Softmax(logits);
+        }
+
+        public int PredictNextToken(double[] x)
+        {
+            double[] probs = Forward(x);
+            return ArgMax(probs);
+        }
+    }
+
+    // ----------------------------
+    // Program
+    // ----------------------------
+    class Program
+    {
+        static void Main(string[] args)
+        {
+            // Vocabulary
+            List<string> vocab = new List<string>() { "[UNK]", "mat", "hello", "world", "i", "love", "llms", "cat", "sat", "on", "the" };
+            Tokenizer tokenizer = new Tokenizer(vocab);
+
+            // Embedding and Transformer
+            int embeddingDim = 16;
+            int numLayers = 2;
+            Embedding embedding = new Embedding(vocab.Count, embeddingDim);
+            Transformer transformer = new Transformer(vocab.Count, embeddingDim, numLayers);
+
+            // Input text
+            string startText = "cat sat on the";
+            List<int> tokenIds = tokenizer.Encode(startText).ToList();
+
+            // Generate next tokens
+            int maxTokens = 2;
+            for (int i = 0; i < maxTokens; i++)
+            {
+                double[] x = embedding.AddPositionalEncoding(embedding.Embed(tokenIds[tokenIds.Count - 1]), tokenIds.Count - 1);
+                int nextId = transformer.PredictNextToken(x);
+                tokenIds.Add(nextId);
+            }
+
+            string generated = tokenizer.Decode(tokenIds.ToArray());
+            Console.WriteLine("Generated text: " + generated);
+        }
+    }
+}
