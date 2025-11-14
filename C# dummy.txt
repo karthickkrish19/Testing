@@ -1,0 +1,499 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+class MiniLLM
+{
+    static Random rnd = new Random(42);
+
+    // ----------------------------
+    // 1. Vocabulary and Tokenizer
+    // ----------------------------
+    static List<string> vocab = new List<string> { "[UNK]", "cat", "sat", "on", "the", "mat", "hello", "world", "i", "love", "llms" };
+    static Dictionary<string, int> tokenToId = vocab.Select((v,i)=> new { v,i }).ToDictionary(x=>x.v, x=>x.i);
+
+    static List<int> Encode(string text)
+    {
+        var tokens = text.ToLower().Split(' ');
+        var ids = new List<int>();
+        foreach(var t in tokens)
+            ids.Add(tokenToId.ContainsKey(t)? tokenToId[t]: tokenToId["[UNK]"]);
+        return ids;
+    }
+
+    static string Decode(List<int> ids)
+    {
+        return string.Join(" ", ids.Select(i => i >=0 && i< vocab.Count ? vocab[i] : "[UNK]"));
+    }
+
+    // ----------------------------
+    // 2. Embeddings
+    // ----------------------------
+    static int embeddingDim = 8;
+    static List<double[]> embeddings = new List<double[]>();
+    static void InitEmbeddings()
+    {
+        for(int i=0;i<vocab.Count;i++)
+        {
+            double[] vec = new double[embeddingDim];
+            for(int j=0;j<embeddingDim;j++)
+                vec[j] = (rnd.NextDouble() - 0.5) * 0.02;
+            embeddings.Add(vec);
+        }
+    }
+
+    static List<double[]> EmbedTokens(List<int> ids)
+    {
+        return ids.Select(id => embeddings[id]).ToList();
+    }
+
+    // ----------------------------
+    // 3. Positional Encoding
+    // ----------------------------
+    static List<double[]> AddPositionalEncoding(List<double[]> x)
+    {
+        int seqLen = x.Count;
+        int d = x[0].Length;
+        for(int pos=0; pos<seqLen; pos++)
+        {
+            for(int i=0;i<d;i+=2)
+            {
+                x[pos][i] += Math.Sin(pos / Math.Pow(10000, (double)i/d));
+                if(i+1<d)
+                    x[pos][i+1] += Math.Cos(pos / Math.Pow(10000, (double)i/d));
+            }
+        }
+        return x;
+    }
+
+    // ----------------------------
+    // 4. Self-Attention
+    // ----------------------------
+    static List<double[]> SimpleSelfAttention(List<double[]> x)
+    {
+        int seqLen = x.Count;
+        int d = x[0].Length;
+
+        double[,] Wq = new double[d,d];
+        double[,] Wk = new double[d,d];
+        double[,] Wv = new double[d,d];
+        for(int i=0;i<d;i++)
+            for(int j=0;j<d;j++)
+            {
+                Wq[i,j] = (rnd.NextDouble()-0.5)*0.02;
+                Wk[i,j] = (rnd.NextDouble()-0.5)*0.02;
+                Wv[i,j] = (rnd.NextDouble()-0.5)*0.02;
+            }
+
+        List<double[]> Q = new List<double[]>();
+        List<double[]> K = new List<double[]>();
+        List<double[]> V = new List<double[]>();
+        for(int i=0;i<seqLen;i++)
+        {
+            double[] qi = new double[d]; double[] ki = new double[d]; double[] vi = new double[d];
+            for(int j=0;j<d;j++)
+            {
+                for(int k=0;k<d;k++)
+                {
+                    qi[j] += x[i][k]*Wq[k,j];
+                    ki[j] += x[i][k]*Wk[k,j];
+                    vi[j] += x[i][k]*Wv[k,j];
+                }
+            }
+            Q.Add(qi); K.Add(ki); V.Add(vi);
+        }
+
+        // Compute scores
+        double[,] scores = new double[seqLen,seqLen];
+        for(int i=0;i<seqLen;i++)
+            for(int j=0;j<seqLen;j++)
+            {
+                double sum = 0;
+                for(int k=0;k<d;k++)
+                    sum += Q[i][k]*K[j][k];
+                scores[i,j] = sum / Math.Sqrt(d);
+            }
+
+        // Softmax
+        for(int i=0;i<seqLen;i++)
+        {
+            double max = Enumerable.Range(0,seqLen).Select(j=>scores[i,j]).Max();
+            double sum = 0;
+            for(int j=0;j<seqLen;j++)
+            {
+                scores[i,j] = Math.Exp(scores[i,j]-max);
+                sum += scores[i,j];
+            }
+            for(int j=0;j<seqLen;j++)
+                scores[i,j] /= sum;
+        }
+
+        // Weighted sum
+        List<double[]> outVec = new List<double[]>();
+        for(int i=0;i<seqLen;i++)
+        {
+            double[] vec = new double[d];
+            for(int j=0;j<seqLen;j++)
+                for(int k=0;k<d;k++)
+                    vec[k] += scores[i,j]*V[j][k];
+            outVec.Add(vec);
+        }
+        return outVec;
+    }
+
+    // ----------------------------
+    // 5. Feed-Forward
+    // ----------------------------
+    static List<double[]> FeedForward(List<double[]> x)
+    {
+        int d = x[0].Length;
+        double[,] W1 = new double[d,d]; double[,] W2 = new double[d,d];
+        double[] b1 = new double[d]; double[] b2 = new double[d];
+        for(int i=0;i<d;i++)
+            for(int j=0;j<d;j++)
+            {
+                W1[i,j] = (rnd.NextDouble()-0.5)*0.02;
+                W2[i,j] = (rnd.NextDouble()-0.5)*0.02;
+            }
+
+        List<double[]> outVec = new List<double[]>();
+        foreach(var vec in x)
+        {
+            double[] h = new double[d];
+            for(int i=0;i<d;i++)
+            {
+                double sum = 0;
+                for(int j=0;j<d;j++)
+                    sum += W1[i,j]*vec[j];
+                sum += b1[i];
+                h[i] = Math.Max(0,sum); // ReLU
+            }
+            double[] h2 = new double[d];
+            for(int i=0;i<d;i++)
+            {
+                double sum = 0;
+                for(int j=0;j<d;j++)
+                    sum += W2[i,j]*h[j];
+                sum += b2[i];
+                h2[i] = sum;
+            }
+            outVec.Add(h2);
+        }
+        return outVec;
+    }
+
+    // ----------------------------
+    // 6. Layer Norm
+    // ----------------------------
+    static List<double[]> LayerNorm(List<double[]> x)
+    {
+        List<double[]> outVec = new List<double[]>();
+        foreach(var vec in x)
+        {
+            double mean = vec.Average();
+            double std = Math.Sqrt(vec.Select(v=>(v-mean)*(v-mean)).Average()+1e-6);
+            double[] norm = vec.Select(v=>(v-mean)/std).ToArray();
+            outVec.Add(norm);
+        }
+        return outVec;
+    }
+
+    // ----------------------------
+    // 7. Transformer Block
+    // ----------------------------
+    static List<double[]> TransformerBlock(List<double[]> x)
+    {
+        x = AddPositionalEncoding(x);
+        var attn = SimpleSelfAttention(x);
+        var ffn = FeedForward(attn);
+        var outVec = new List<double[]>();
+        for(int i=0;i<x.Count;i++)
+        {
+            double[] sum = new double[embeddingDim];
+            for(int j=0;j<embeddingDim;j++)
+                sum[j] = attn[i][j] + ffn[i][j];
+            outVec.Add(sum);
+        }
+        return LayerNorm(outVec);
+    }
+
+    // ----------------------------
+    // 8. Predict Next Token
+    // ----------------------------
+    static int PredictNextToken(List<double[]> x)
+    {
+        int d = embeddingDim;
+        double[,] Wout = new double[d,vocab.Count];
+        for(int i=0;i<d;i++)
+            for(int j=0;j<vocab.Count;j++)
+                Wout[i,j] = (rnd.NextDouble()-0.5)*0.02;
+
+        double[] lastVec = x.Last();
+        double[] logits = new double[vocab.Count];
+        for(int j=0;j<vocab.Count;j++)
+            for(int i=0;i<d;i++)
+                logits[j] += lastVec[i]*Wout[i,j];
+
+        double max = logits.Max();
+        int idx = Array.IndexOf(logits,max);
+        return idx;
+    }
+
+    // ----------------------------
+    // 9. Generate Text
+    // ----------------------------
+    static string GenerateText(string prompt, int maxTokens=5)
+    {
+        var tokenIds = Encode(prompt);
+        Console.WriteLine("Starting tokens: "+ string.Join(", ", tokenIds.Select(i=>vocab[i])));
+        for(int i=0;i<maxTokens;i++)
+        {
+            var tokenVectors = EmbedTokens(tokenIds);
+            var contextVectors = TransformerBlock(tokenVectors);
+            int nextId = PredictNextToken(contextVectors);
+            tokenIds.Add(nextId);
+        }
+        return Decode(tokenIds);
+    }
+
+    // ----------------------------
+    // Main
+    // ----------------------------
+    static void Main()
+    {
+        InitEmbeddings();
+        string prompt = "cat sat on the";
+        string generated = GenerateText(prompt,3);
+        Console.WriteLine("Generated text: "+generated);
+    }
+}
+
+
+
+
+2 step 
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace TinyLLM
+{
+    class Program
+    {
+        // ----------------------------
+        // Tokenizer
+        // ----------------------------
+        class Tokenizer
+        {
+            public Dictionary<string, int> vocab = new Dictionary<string, int>();
+            public Dictionary<int, string> invVocab = new Dictionary<int, string>();
+
+            public Tokenizer(List<string> words)
+            {
+                for (int i = 0; i < words.Count; i++)
+                {
+                    vocab[words[i]] = i;
+                    invVocab[i] = words[i];
+                }
+            }
+
+            public int[] Encode(string text)
+            {
+                var tokens = text.ToLower().Split(' ');
+                int[] ids = new int[tokens.Length];
+                for (int i = 0; i < tokens.Length; i++)
+                    ids[i] = vocab.ContainsKey(tokens[i]) ? vocab[tokens[i]] : vocab["[UNK]"];
+                return ids;
+            }
+
+            public string Decode(int[] ids)
+            {
+                string[] tokens = new string[ids.Length];
+                for (int i = 0; i < ids.Length; i++)
+                    tokens[i] = invVocab.ContainsKey(ids[i]) ? invVocab[ids[i]] : "[UNK]";
+                return string.Join(" ", tokens);
+            }
+        }
+
+        // ----------------------------
+        // Utilities
+        // ----------------------------
+        static Random rnd = new Random();
+        static double[,] RandMatrix(int rows, int cols, double scale)
+        {
+            double[,] m = new double[rows, cols];
+            for (int i = 0; i < rows; i++)
+                for (int j = 0; j < cols; j++)
+                    m[i, j] = (rnd.NextDouble() * 2 - 1) * scale;
+            return m;
+        }
+
+        static double[] MatVecMul(double[,] W, double[] x)
+        {
+            int rows = W.GetLength(0), cols = W.GetLength(1);
+            double[] y = new double[cols];
+            for (int j = 0; j < cols; j++)
+                for (int i = 0; i < rows; i++)
+                    y[j] += x[i] * W[i, j];
+            return y;
+        }
+
+        static double[,] Add(double[,] a, double[,] b)
+        {
+            int rows = a.GetLength(0), cols = a.GetLength(1);
+            double[,] c = new double[rows, cols];
+            for (int i = 0; i < rows; i++)
+                for (int j = 0; j < cols; j++)
+                    c[i, j] = a[i, j] + b[i, j];
+            return c;
+        }
+
+        static double[] Softmax(double[] logits)
+        {
+            double max = logits.Max();
+            double sum = 0;
+            double[] exps = new double[logits.Length];
+            for (int i = 0; i < logits.Length; i++)
+            {
+                exps[i] = Math.Exp(logits[i] - max);
+                sum += exps[i];
+            }
+            for (int i = 0; i < logits.Length; i++)
+                exps[i] /= sum;
+            return exps;
+        }
+
+        static int ArgMax(double[] arr)
+        {
+            int idx = 0; double max = arr[0];
+            for (int i = 1; i < arr.Length; i++)
+                if (arr[i] > max) { max = arr[i]; idx = i; }
+            return idx;
+        }
+
+        // ----------------------------
+        // Model Parameters
+        // ----------------------------
+        static int vocabSize = 11;
+        static int embeddingDim = 8;
+        static double[,] embeddings;
+        static double[,] Wout;
+        static double learningRate = 0.5;
+
+        static void InitWeights()
+        {
+            embeddings = RandMatrix(vocabSize, embeddingDim, 0.01);
+            Wout = RandMatrix(embeddingDim, vocabSize, 0.01);
+        }
+
+        // ----------------------------
+        // Embedding
+        // ----------------------------
+        static double[] Embed(int tokenId)
+        {
+            double[] vec = new double[embeddingDim];
+            for (int i = 0; i < embeddingDim; i++)
+                vec[i] = embeddings[tokenId, i];
+            return vec;
+        }
+
+        // ----------------------------
+        // Transformer block (minimal)
+        // ----------------------------
+        static double[] SelfAttention(double[] x)
+        {
+            // minimal: pretend identity attention
+            return x;
+        }
+
+        static double[] FeedForward(double[] x)
+        {
+            // minimal: simple ReLU-like
+            double[] y = new double[x.Length];
+            for (int i = 0; i < x.Length; i++)
+                y[i] = Math.Max(0, x[i]);
+            return y;
+        }
+
+        static double[] TransformerBlock(double[] x)
+        {
+            double[] attn = SelfAttention(x);
+            double[] ff = FeedForward(attn);
+            // layer norm minimal: skip for simplicity
+            double[] outVec = new double[x.Length];
+            for (int i = 0; i < x.Length; i++)
+                outVec[i] = attn[i] + ff[i];
+            return outVec;
+        }
+
+        // ----------------------------
+        // Forward
+        // ----------------------------
+        static double[] Forward(int[] tokenIds)
+        {
+            double[] x = Embed(tokenIds[tokenIds.Length - 1]);
+            double[] context = TransformerBlock(x);
+            double[] logits = MatVecMul(Wout, context);
+            return Softmax(logits);
+        }
+
+        // ----------------------------
+        // Train output layer only (toy)
+        // ----------------------------
+        static void Train(int[] tokenIds, int epochs = 500)
+        {
+            for (int e = 0; e < epochs; e++)
+            {
+                for (int t = 0; t < tokenIds.Length - 1; t++)
+                {
+                    double[] x = Embed(tokenIds[t]);
+                    double[] context = TransformerBlock(x);
+                    double[] logits = MatVecMul(Wout, context);
+                    double[] probs = Softmax(logits);
+                    int target = tokenIds[t + 1];
+                    probs[target] -= 1; // derivative of cross-entropy
+
+                    for (int i = 0; i < embeddingDim; i++)
+                        for (int j = 0; j < vocabSize; j++)
+                            Wout[i, j] -= learningRate * probs[j] * context[i];
+                }
+            }
+        }
+
+        // ----------------------------
+        // Generate text
+        // ----------------------------
+        static string Generate(Tokenizer tokenizer, string start, int maxTokens)
+        {
+            List<int> tokenIds = tokenizer.Encode(start).ToList();
+
+            for (int i = 0; i < maxTokens; i++)
+            {
+                double[] probs = Forward(tokenIds.ToArray());
+                int nextId = ArgMax(probs);
+                tokenIds.Add(nextId);
+            }
+
+            return tokenizer.Decode(tokenIds.ToArray());
+        }
+
+        static void Main(string[] args)
+        {
+            List<string> vocab = new List<string>() { "[UNK]", "mat", "hello", "world", "i", "love", "llms", "cat", "sat", "on", "the" };
+            Tokenizer tokenizer = new Tokenizer(vocab);
+
+            InitWeights();
+
+            string text = "cat sat on the mat";
+            int[] tokenIds = tokenizer.Encode(text);
+
+            Train(tokenIds, epochs: 1000);
+
+            string generated = Generate(tokenizer, "cat sat on the", 1);
+            Console.WriteLine("Generated text: " + generated);
+        }
+    }
+}
+
+
