@@ -1,0 +1,679 @@
+Great progress! Now you need to build the core transformer architecture and training pipeline. Here's what you should implement next:
+
+Next Steps - Core Model Architecture
+
+1. First, create the missing model interfaces and configurations:
+
+```csharp
+// Models/ModelConfig.cs
+namespace LLM_Module_API.Models
+{
+    public class ModelConfig
+    {
+        public int VocabSize { get; set; } = 50000;
+        public int EmbeddingDim { get; set; } = 512;
+        public int HiddenDim { get; set; } = 2048;
+        public int NumHeads { get; set; } = 8;
+        public int NumLayers { get; set; } = 6;
+        public int MaxSequenceLength { get; set; } = 2048;
+        public float DropoutRate { get; set; } = 0.1f;
+        public float LearningRate { get; set; } = 0.001f;
+    }
+
+    public class TrainingConfig
+    {
+        public int BatchSize { get; set; } = 32;
+        public int Epochs { get; set; } = 10;
+        public int SaveInterval { get; set; } = 1000;
+        public string CheckpointDir { get; set; } = "checkpoints";
+        public bool UseMixedPrecision { get; set; } = false;
+    }
+}
+
+// Interfaces/ITransformerService.cs
+namespace LLM_Module_API.Services
+{
+    public interface ITransformerService
+    {
+        float[] Forward(int[] tokenIds);
+        float TrainStep(int[][] batchInputs, int[][] batchTargets);
+        void SaveModel(string path);
+        void LoadModel(string path);
+        ModelConfig GetConfig();
+    }
+}
+```
+
+2. Implement Multi-Head Attention
+
+```csharp
+// Services/AttentionService.cs
+namespace LLM_Module_API.Services
+{
+    public class MultiHeadAttention
+    {
+        private readonly int _embeddingDim;
+        private readonly int _numHeads;
+        private readonly int _headDim;
+        private readonly float _scalingFactor;
+        
+        // Weight matrices
+        private readonly float[,] _wQ, _wK, _wV, _wO;
+        private readonly float[] _bQ, _bK, _bV, _bO;
+
+        public MultiHeadAttention(int embeddingDim, int numHeads)
+        {
+            _embeddingDim = embeddingDim;
+            _numHeads = numHeads;
+            _headDim = embeddingDim / numHeads;
+            _scalingFactor = 1.0f / MathF.Sqrt(_headDim);
+
+            // Initialize weights
+            _wQ = InitializeWeights(embeddingDim, embeddingDim);
+            _wK = InitializeWeights(embeddingDim, embeddingDim);
+            _wV = InitializeWeights(embeddingDim, embeddingDim);
+            _wO = InitializeWeights(embeddingDim, embeddingDim);
+            
+            _bQ = new float[embeddingDim];
+            _bK = new float[embeddingDim];
+            _bV = new float[embeddingDim];
+            _bO = new float[embeddingDim];
+        }
+
+        private float[,] InitializeWeights(int rows, int cols)
+        {
+            var rnd = new Random();
+            var weights = new float[rows, cols];
+            float std = MathF.Sqrt(2.0f / (rows + cols));
+            
+            for (int i = 0; i < rows; i++)
+            {
+                for (int j = 0; j < cols; j++)
+                {
+                    weights[i, j] = (float)(rnd.NextDouble() * 2 - 1) * std;
+                }
+            }
+            return weights;
+        }
+
+        public float[,] Forward(float[,] query, float[,] key, float[,] value, bool isCausal = true)
+        {
+            int seqLen = query.GetLength(0);
+            
+            // Linear projections
+            var Q = LinearTransform(query, _wQ, _bQ);
+            var K = LinearTransform(key, _wK, _bK);
+            var V = LinearTransform(value, _wV, _bV);
+            
+            // Reshape for multi-head: [seqLen, numHeads, headDim]
+            var Q_heads = ReshapeForHeads(Q);
+            var K_heads = ReshapeForHeads(K);
+            var V_heads = ReshapeForHeads(V);
+            
+            // Compute attention scores
+            var scores = ComputeAttentionScores(Q_heads, K_heads);
+            
+            // Apply causal mask if needed
+            if (isCausal)
+            {
+                scores = ApplyCausalMask(scores);
+            }
+            
+            // Apply softmax
+            var attentionWeights = Softmax(scores, 2); // Along sequence dimension
+            
+            // Apply attention to values
+            var outputHeads = ApplyAttention(attentionWeights, V_heads);
+            
+            // Concatenate heads and linear projection
+            var output = ConcatenateHeads(outputHeads);
+            output = LinearTransform(output, _wO, _bO);
+            
+            return output;
+        }
+
+        private float[,,] ReshapeForHeads(float[,] x)
+        {
+            int seqLen = x.GetLength(0);
+            var result = new float[seqLen, _numHeads, _headDim];
+            
+            for (int i = 0; i < seqLen; i++)
+            {
+                for (int h = 0; h < _numHeads; h++)
+                {
+                    for (int d = 0; d < _headDim; d++)
+                    {
+                        result[i, h, d] = x[i, h * _headDim + d];
+                    }
+                }
+            }
+            return result;
+        }
+
+        private float[,,] ComputeAttentionScores(float[,,] Q, float[,,] K)
+        {
+            int seqLen = Q.GetLength(0);
+            var scores = new float[seqLen, _numHeads, seqLen];
+            
+            for (int i = 0; i < seqLen; i++)
+            {
+                for (int h = 0; h < _numHeads; h++)
+                {
+                    for (int j = 0; j < seqLen; j++)
+                    {
+                        float dotProduct = 0;
+                        for (int d = 0; d < _headDim; d++)
+                        {
+                            dotProduct += Q[i, h, d] * K[j, h, d];
+                        }
+                        scores[i, h, j] = dotProduct * _scalingFactor;
+                    }
+                }
+            }
+            return scores;
+        }
+
+        private float[,,] ApplyCausalMask(float[,,] scores)
+        {
+            int seqLen = scores.GetLength(0);
+            for (int i = 0; i < seqLen; i++)
+            {
+                for (int h = 0; h < _numHeads; h++)
+                {
+                    for (int j = i + 1; j < seqLen; j++)
+                    {
+                        scores[i, h, j] = float.NegativeInfinity;
+                    }
+                }
+            }
+            return scores;
+        }
+
+        private float[,,] Softmax(float[,,] x, int axis)
+        {
+            int seqLen = x.GetLength(0);
+            int numHeads = x.GetLength(1);
+            var result = new float[seqLen, numHeads, seqLen];
+            
+            for (int i = 0; i < seqLen; i++)
+            {
+                for (int h = 0; h < numHeads; h++)
+                {
+                    // Find max for numerical stability
+                    float max = float.NegativeInfinity;
+                    for (int j = 0; j < seqLen; j++)
+                    {
+                        if (x[i, h, j] > max) max = x[i, h, j];
+                    }
+                    
+                    // Compute exp and sum
+                    float sum = 0;
+                    for (int j = 0; j < seqLen; j++)
+                    {
+                        result[i, h, j] = MathF.Exp(x[i, h, j] - max);
+                        sum += result[i, h, j];
+                    }
+                    
+                    // Normalize
+                    for (int j = 0; j < seqLen; j++)
+                    {
+                        result[i, h, j] /= sum;
+                    }
+                }
+            }
+            return result;
+        }
+
+        private float[,] LinearTransform(float[,] input, float[,] weights, float[] bias)
+        {
+            int rows = input.GetLength(0);
+            int cols = weights.GetLength(1);
+            var output = new float[rows, cols];
+            
+            for (int i = 0; i < rows; i++)
+            {
+                for (int j = 0; j < cols; j++)
+                {
+                    float sum = 0;
+                    for (int k = 0; k < input.GetLength(1); k++)
+                    {
+                        sum += input[i, k] * weights[k, j];
+                    }
+                    output[i, j] = sum + bias[j];
+                }
+            }
+            return output;
+        }
+        
+        private float[,,] ApplyAttention(float[,,] attentionWeights, float[,,] V)
+        {
+            int seqLen = attentionWeights.GetLength(0);
+            var output = new float[seqLen, _numHeads, _headDim];
+            
+            for (int i = 0; i < seqLen; i++)
+            {
+                for (int h = 0; h < _numHeads; h++)
+                {
+                    for (int d = 0; d < _headDim; d++)
+                    {
+                        float sum = 0;
+                        for (int j = 0; j < seqLen; j++)
+                        {
+                            sum += attentionWeights[i, h, j] * V[j, h, d];
+                        }
+                        output[i, h, d] = sum;
+                    }
+                }
+            }
+            return output;
+        }
+
+        private float[,] ConcatenateHeads(float[,,] x)
+        {
+            int seqLen = x.GetLength(0);
+            var result = new float[seqLen, _embeddingDim];
+            
+            for (int i = 0; i < seqLen; i++)
+            {
+                for (int h = 0; h < _numHeads; h++)
+                {
+                    for (int d = 0; d < _headDim; d++)
+                    {
+                        result[i, h * _headDim + d] = x[i, h, d];
+                    }
+                }
+            }
+            return result;
+        }
+    }
+}
+```
+
+3. Implement Feed-Forward Network
+
+```csharp
+// Services/FeedForwardService.cs
+namespace LLM_Module_API.Services
+{
+    public class FeedForwardNetwork
+    {
+        private readonly int _inputDim;
+        private readonly int _hiddenDim;
+        private readonly int _outputDim;
+        
+        private readonly float[,] _w1, _w2;
+        private readonly float[] _b1, _b2;
+
+        public FeedForwardNetwork(int inputDim, int hiddenDim, int outputDim)
+        {
+            _inputDim = inputDim;
+            _hiddenDim = hiddenDim;
+            _outputDim = outputDim;
+            
+            _w1 = InitializeWeights(inputDim, hiddenDim);
+            _w2 = InitializeWeights(hiddenDim, outputDim);
+            _b1 = new float[hiddenDim];
+            _b2 = new float[outputDim];
+        }
+
+        private float[,] InitializeWeights(int rows, int cols)
+        {
+            var rnd = new Random();
+            var weights = new float[rows, cols];
+            float std = MathF.Sqrt(2.0f / (rows + cols));
+            
+            for (int i = 0; i < rows; i++)
+            {
+                for (int j = 0; j < cols; j++)
+                {
+                    weights[i, j] = (float)(rnd.NextDouble() * 2 - 1) * std;
+                }
+            }
+            return weights;
+        }
+
+        public float[,] Forward(float[,] x)
+        {
+            // First linear layer + GELU activation
+            var hidden = LinearTransform(x, _w1, _b1);
+            hidden = GELU(hidden);
+            
+            // Second linear layer
+            var output = LinearTransform(hidden, _w2, _b2);
+            return output;
+        }
+
+        private float[,] LinearTransform(float[,] input, float[,] weights, float[] bias)
+        {
+            int rows = input.GetLength(0);
+            int cols = weights.GetLength(1);
+            var output = new float[rows, cols];
+            
+            for (int i = 0; i < rows; i++)
+            {
+                for (int j = 0; j < cols; j++)
+                {
+                    float sum = 0;
+                    for (int k = 0; k < input.GetLength(1); k++)
+                    {
+                        sum += input[i, k] * weights[k, j];
+                    }
+                    output[i, j] = sum + bias[j];
+                }
+            }
+            return output;
+        }
+
+        private float[,] GELU(float[,] x)
+        {
+            var result = new float[x.GetLength(0), x.GetLength(1)];
+            for (int i = 0; i < x.GetLength(0); i++)
+            {
+                for (int j = 0; j < x.GetLength(1); j++)
+                {
+                    // GELU approximation: x * Φ(x) where Φ is Gaussian CDF
+                    result[i, j] = x[i, j] * 0.5f * (1.0f + TanhApprox(
+                        MathF.Sqrt(2.0f / MathF.PI) * (x[i, j] + 0.044715f * MathF.Pow(x[i, j], 3))));
+                }
+            }
+            return result;
+        }
+
+        private float TanhApprox(float x)
+        {
+            // Fast tanh approximation
+            if (x < -3) return -1;
+            if (x > 3) return 1;
+            return x * (27 + x * x) / (27 + 9 * x * x);
+        }
+    }
+}
+```
+
+4. Implement Transformer Block
+
+```csharp
+// Services/TransformerBlockService.cs
+namespace LLM_Module_API.Services
+{
+    public class TransformerBlock
+    {
+        private readonly MultiHeadAttention _attention;
+        private readonly FeedForwardNetwork _ffn;
+        private readonly int _embeddingDim;
+        private readonly float _dropoutRate;
+        
+        // Layer normalization parameters
+        private readonly float[] _gamma1, _beta1, _gamma2, _beta2;
+        private readonly float _epsilon = 1e-5f;
+
+        public TransformerBlock(int embeddingDim, int numHeads, int hiddenDim, float dropoutRate = 0.1f)
+        {
+            _embeddingDim = embeddingDim;
+            _dropoutRate = dropoutRate;
+            
+            _attention = new MultiHeadAttention(embeddingDim, numHeads);
+            _ffn = new FeedForwardNetwork(embeddingDim, hiddenDim, embeddingDim);
+            
+            // Initialize layer norm parameters
+            _gamma1 = new float[embeddingDim];
+            _beta1 = new float[embeddingDim];
+            _gamma2 = new float[embeddingDim];
+            _beta2 = new float[embeddingDim];
+            
+            Array.Fill(_gamma1, 1.0f);
+            Array.Fill(_gamma2, 1.0f);
+        }
+
+        public float[,] Forward(float[,] x)
+        {
+            // Self-attention with residual connection and layer norm
+            var norm1 = LayerNorm(x, _gamma1, _beta1);
+            var attentionOutput = _attention.Forward(norm1, norm1, norm1);
+            var attentionResidual = AddWithDropout(x, attentionOutput, _dropoutRate);
+            
+            // Feed-forward with residual connection and layer norm
+            var norm2 = LayerNorm(attentionResidual, _gamma2, _beta2);
+            var ffnOutput = _ffn.Forward(norm2);
+            var output = AddWithDropout(attentionResidual, ffnOutput, _dropoutRate);
+            
+            return output;
+        }
+
+        private float[,] LayerNorm(float[,] x, float[] gamma, float[] beta)
+        {
+            int seqLen = x.GetLength(0);
+            var result = new float[seqLen, _embeddingDim];
+            
+            for (int i = 0; i < seqLen; i++)
+            {
+                // Calculate mean
+                float mean = 0;
+                for (int j = 0; j < _embeddingDim; j++)
+                {
+                    mean += x[i, j];
+                }
+                mean /= _embeddingDim;
+                
+                // Calculate variance
+                float variance = 0;
+                for (int j = 0; j < _embeddingDim; j++)
+                {
+                    variance += (x[i, j] - mean) * (x[i, j] - mean);
+                }
+                variance /= _embeddingDim;
+                
+                // Normalize and scale
+                for (int j = 0; j < _embeddingDim; j++)
+                {
+                    result[i, j] = (x[i, j] - mean) / MathF.Sqrt(variance + _epsilon) * gamma[j] + beta[j];
+                }
+            }
+            return result;
+        }
+
+        private float[,] AddWithDropout(float[,] a, float[,] b, float dropoutRate)
+        {
+            var rnd = new Random();
+            var result = new float[a.GetLength(0), a.GetLength(1)];
+            
+            for (int i = 0; i < a.GetLength(0); i++)
+            {
+                for (int j = 0; j < a.GetLength(1); j++)
+                {
+                    // Apply dropout during training only
+                    if (rnd.NextDouble() < dropoutRate)
+                    {
+                        result[i, j] = a[i, j]; // Drop the b component
+                    }
+                    else
+                    {
+                        result[i, j] = a[i, j] + b[i, j];
+                    }
+                }
+            }
+            return result;
+        }
+    }
+}
+```
+
+5. Main Transformer Model
+
+```csharp
+// Services/TransformerService.cs
+namespace LLM_Module_API.Services
+{
+    public class TransformerService : ITransformerService
+    {
+        private readonly ModelConfig _config;
+        private readonly ITokeniserService _tokeniser;
+        private readonly IEmbeddingService _embeddingService;
+        private readonly List<TransformerBlock> _layers;
+        private readonly float[,] _outputWeights;
+        private readonly float[] _outputBias;
+
+        public TransformerService(ITokeniserService tokeniser, IEmbeddingService embeddingService, ModelConfig config)
+        {
+            _config = config;
+            _tokeniser = tokeniser;
+            _embeddingService = embeddingService;
+            
+            _layers = new List<TransformerBlock>();
+            for (int i = 0; i < config.NumLayers; i++)
+            {
+                _layers.Add(new TransformerBlock(
+                    config.EmbeddingDim,
+                    config.NumHeads,
+                    config.HiddenDim,
+                    config.DropoutRate
+                ));
+            }
+            
+            // Output projection
+            _outputWeights = InitializeWeights(config.EmbeddingDim, config.VocabSize);
+            _outputBias = new float[config.VocabSize];
+        }
+
+        public float[] Forward(int[] tokenIds)
+        {
+            // Get embeddings
+            var embeddings = _embeddingService.GetEmbeddings(tokenIds);
+            
+            // Convert to 2D array for processing
+            var x = new float[tokenIds.Length, _config.EmbeddingDim];
+            for (int i = 0; i < tokenIds.Length; i++)
+            {
+                for (int j = 0; j < _config.EmbeddingDim; j++)
+                {
+                    x[i, j] = embeddings[i][j];
+                }
+            }
+            
+            // Pass through transformer layers
+            foreach (var layer in _layers)
+            {
+                x = layer.Forward(x);
+            }
+            
+            // Output projection to vocabulary
+            var logits = ProjectToVocabulary(x);
+            return logits;
+        }
+
+        public float TrainStep(int[][] batchInputs, int[][] batchTargets)
+        {
+            float totalLoss = 0;
+            int totalTokens = 0;
+            
+            for (int i = 0; i < batchInputs.Length; i++)
+            {
+                var logits = Forward(batchInputs[i]);
+                var loss = ComputeCrossEntropyLoss(logits, batchTargets[i]);
+                totalLoss += loss;
+                totalTokens += batchTargets[i].Length;
+                
+                // Backward pass would go here (implement later)
+            }
+            
+            return totalLoss / totalTokens;
+        }
+
+        private float[] ProjectToVocabulary(float[,] x)
+        {
+            // Simple linear projection to vocabulary size
+            var logits = new float[_config.VocabSize];
+            
+            // Use the last token's representation for prediction
+            int lastTokenIdx = x.GetLength(0) - 1;
+            
+            for (int j = 0; j < _config.VocabSize; j++)
+            {
+                float sum = 0;
+                for (int k = 0; k < _config.EmbeddingDim; k++)
+                {
+                    sum += x[lastTokenIdx, k] * _outputWeights[k, j];
+                }
+                logits[j] = sum + _outputBias[j];
+            }
+            
+            return logits;
+        }
+
+        private float ComputeCrossEntropyLoss(float[] logits, int[] targets)
+        {
+            // Apply softmax to get probabilities
+            var probs = Softmax(logits);
+            
+            // Compute cross-entropy loss
+            float loss = 0;
+            foreach (var target in targets)
+            {
+                loss -= MathF.Log(probs[target] + 1e-8f);
+            }
+            
+            return loss / targets.Length;
+        }
+
+        private float[] Softmax(float[] x)
+        {
+            var result = new float[x.Length];
+            float max = x.Max();
+            float sum = 0;
+            
+            for (int i = 0; i < x.Length; i++)
+            {
+                result[i] = MathF.Exp(x[i] - max);
+                sum += result[i];
+            }
+            
+            for (int i = 0; i < x.Length; i++)
+            {
+                result[i] /= sum;
+            }
+            
+            return result;
+        }
+
+        private float[,] InitializeWeights(int rows, int cols)
+        {
+            var rnd = new Random();
+            var weights = new float[rows, cols];
+            float std = MathF.Sqrt(2.0f / (rows + cols));
+            
+            for (int i = 0; i < rows; i++)
+            {
+                for (int j = 0; j < cols; j++)
+                {
+                    weights[i, j] = (float)(rnd.NextDouble() * 2 - 1) * std;
+                }
+            }
+            return weights;
+        }
+
+        public void SaveModel(string path)
+        {
+            // Implementation for saving model weights
+            throw new NotImplementedException();
+        }
+
+        public void LoadModel(string path)
+        {
+            // Implementation for loading model weights
+            throw new NotImplementedException();
+        }
+
+        public ModelConfig GetConfig() => _config;
+    }
+}
+```
+
+Immediate Next Actions:
+
+1. Test your current tokeniser with sample text
+2. Create sample training data in your input directory
+3. Implement the training pipeline with data batching
+4. Add controller endpoints for model training and inference
+5. Implement backpropagation for the transformer layers
+
+Would you like me to continue with the training pipeline and controller implementation?
