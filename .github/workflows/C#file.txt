@@ -1,0 +1,769 @@
+Looking at your code, I can see several issues and missing components. Here's the complete, improved version with all necessary parts:
+
+Complete Fixed Code
+
+1. Interfaces and Models
+
+```csharp
+// Interfaces/ITokeniserService.cs
+namespace LLM_Module_API.Services
+{
+    public interface ITokeniserService
+    {
+        Dictionary<string, int> TrainTokeniser();
+        (Dictionary<string, int> Vocab, Dictionary<int, string> IdToToken, List<(string, string)> Merges) Load();
+        List<int> Encode(string text);
+        string Decode(List<int> tokenIds);
+        int GetVocabSize();
+    }
+}
+
+// Interfaces/IEmbeddingService.cs
+namespace LLM_Module_API.Services
+{
+    public interface IEmbeddingService
+    {
+        float[][] GetEmbeddings(List<int> tokenIds);
+        int GetVocabSize();
+        int GetEmbeddingDim();
+    }
+}
+
+// Models/TokeniserLoadResponse.cs
+namespace LLM_Module_API.Models
+{
+    public class TokeniserLoadResponse
+    {
+        public Dictionary<string, int> Vocab { get; set; } = new();
+        public Dictionary<int, string> IdToToken { get; set; } = new();
+        public List<MergePair> Merges { get; set; } = new();
+    }
+
+    public class MergePair
+    {
+        public string First { get; set; } = string.Empty;
+        public string Second { get; set; } = string.Empty;
+    }
+}
+```
+
+2. Improved Tokeniser Service
+
+```csharp
+using System.Collections.Concurrent;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+
+namespace LLM_Module_API.Services
+{
+    public class TokeniserService : ITokeniserService
+    {
+        private readonly string _inputDir;
+        private readonly string _outputDir;
+        private readonly string _textFilePath;
+        private readonly int _vocabSize = 50000;
+        private readonly List<string> _specialTokens = new() { "<unk>", "<pad>", "<bos>", "<eos>", "</w>" };
+        
+        private Dictionary<string, int> _vocab = new();
+        private Dictionary<int, string> _idToToken = new();
+        private List<(string, string)> _merges = new();
+        private Dictionary<(string, string), int> _ranks = new();
+        private bool _isLoaded = false;
+        private readonly object _lockObject = new object();
+
+        public TokeniserService(IWebHostEnvironment env)
+        {
+            _inputDir = Path.Combine(env.WebRootPath, "data", "input");
+            _outputDir = Path.Combine(env.WebRootPath, "data", "output");
+            _textFilePath = Path.Combine(_inputDir, "sampleinput.txt");
+
+            // Create directories if they don't exist
+            Directory.CreateDirectory(_inputDir);
+            Directory.CreateDirectory(_outputDir);
+        }
+
+        public Dictionary<string, int> TrainTokeniser()
+        {
+            if (!File.Exists(_textFilePath))
+                throw new FileNotFoundException($"Input file not found: {_textFilePath}");
+
+            string content = File.ReadAllText(_textFilePath);
+            string cleanedText = CleanText(content);
+
+            if (string.IsNullOrEmpty(cleanedText))
+                throw new InvalidOperationException("No valid text content after cleaning");
+
+            // Split into words and convert to character tokens
+            var tokenLists = cleanedText
+                .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                .Where(word => !string.IsNullOrEmpty(word))
+                .Select(word => word.Select(c => c.ToString()).ToList())
+                .ToList();
+
+            var corpus = tokenLists;
+            var tokenSet = new HashSet<string>();
+
+            // Initialize with character tokens
+            foreach (var word in corpus)
+            {
+                foreach (var token in word)
+                {
+                    tokenSet.Add(token);
+                }
+            }
+
+            int mergeCount = 0;
+            int maxMerges = _vocabSize - _specialTokens.Count - tokenSet.Count;
+
+            while (tokenSet.Count < _vocabSize && mergeCount < maxMerges)
+            {
+                var pairFreqs = GetPairFrequenciesParallel(corpus);
+                if (pairFreqs.Count == 0) break;
+
+                var bestPair = pairFreqs.OrderByDescending(pair => pair.Value).First().Key;
+                _merges.Add(bestPair);
+
+                // Update corpus with merged pairs
+                corpus = MergePair(bestPair, corpus);
+
+                // Update token set
+                tokenSet.Clear();
+                foreach (var word in corpus)
+                {
+                    foreach (var token in word)
+                    {
+                        tokenSet.Add(token);
+                    }
+                }
+
+                mergeCount++;
+
+                if (mergeCount % 1000 == 0)
+                {
+                    Console.WriteLine($"Completed {mergeCount} merges, vocabulary size: {tokenSet.Count}");
+                }
+            }
+
+            BuildVocabulary(tokenSet);
+            SaveTokeniserAsync().Wait();
+            _isLoaded = true;
+
+            Console.WriteLine($"Training completed. Final vocabulary size: {_vocab.Count}");
+            return _vocab;
+        }
+
+        private void BuildVocabulary(HashSet<string> tokenSet)
+        {
+            _vocab.Clear();
+            _idToToken.Clear();
+            _ranks.Clear();
+
+            // Add special tokens first
+            int id = 0;
+            foreach (var token in _specialTokens)
+            {
+                _vocab[token] = id;
+                _idToToken[id] = token;
+                id++;
+            }
+
+            // Add regular tokens
+            foreach (var token in tokenSet.OrderBy(t => t))
+            {
+                if (!_vocab.ContainsKey(token))
+                {
+                    _vocab[token] = id;
+                    _idToToken[id] = token;
+                    id++;
+                }
+            }
+
+            // Build ranks for merges
+            for (int i = 0; i < _merges.Count; i++)
+            {
+                _ranks[_merges[i]] = i;
+            }
+        }
+
+        private async Task SaveTokeniserAsync()
+        {
+            try
+            {
+                if (!Directory.Exists(_outputDir))
+                    Directory.CreateDirectory(_outputDir);
+
+                var vocabJson = JsonSerializer.Serialize(_vocab, new JsonSerializerOptions { WriteIndented = true });
+                await File.WriteAllTextAsync(Path.Combine(_outputDir, "vocab.json"), vocabJson);
+
+                var mergeLines = new List<string> { "#v1.0" };
+                mergeLines.AddRange(_merges.Select(m => $"{m.Item1} {m.Item2}"));
+                await File.WriteAllLinesAsync(Path.Combine(_outputDir, "merges.txt"), mergeLines);
+
+                Console.WriteLine("Tokeniser saved successfully");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error saving tokeniser: {ex.Message}");
+                throw;
+            }
+        }
+
+        public (Dictionary<string, int> Vocab, Dictionary<int, string> IdToToken, List<(string, string)> Merges) Load()
+        {
+            lock (_lockObject)
+            {
+                if (!_isLoaded)
+                {
+                    var vocabPath = Path.Combine(_outputDir, "vocab.json");
+                    var mergesPath = Path.Combine(_outputDir, "merges.txt");
+
+                    if (!File.Exists(vocabPath) || !File.Exists(mergesPath))
+                        throw new FileNotFoundException("Tokeniser files not found. Train the tokeniser first.");
+
+                    try
+                    {
+                        _vocab = JsonSerializer.Deserialize<Dictionary<string, int>>(
+                            File.ReadAllText(vocabPath)) ?? new Dictionary<string, int>();
+
+                        _idToToken = _vocab.ToDictionary(kv => kv.Value, kv => kv.Key);
+
+                        var lines = File.ReadAllLines(mergesPath).Skip(1); // Skip version header
+                        _merges = lines
+                            .Where(line => !string.IsNullOrWhiteSpace(line))
+                            .Select(l => 
+                            {
+                                var parts = l.Split(' ', 2);
+                                return (parts[0], parts[1]);
+                            })
+                            .ToList();
+
+                        _ranks = _merges.Select((m, i) => new { m, i })
+                                       .ToDictionary(x => x.m, x => x.i);
+
+                        _isLoaded = true;
+                        Console.WriteLine("Tokeniser loaded successfully");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Error loading tokeniser: {ex.Message}");
+                        throw;
+                    }
+                }
+                return (_vocab, _idToToken, _merges);
+            }
+        }
+
+        public List<int> Encode(string text)
+        {
+            if (!_isLoaded) Load();
+
+            var cleanedText = CleanText(text);
+            var tokenIds = new List<int>();
+            var unknownTokens = new List<string>();
+
+            foreach (var word in cleanedText.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (string.IsNullOrEmpty(word)) continue;
+
+                var tokens = word.Select(c => c.ToString()).ToList();
+                tokens.Add("</w>"); // Add word ending token
+                
+                var mergedTokens = ApplyMerges(tokens);
+
+                foreach (var token in mergedTokens)
+                {
+                    if (_vocab.TryGetValue(token, out int tokenId))
+                    {
+                        tokenIds.Add(tokenId);
+                    }
+                    else
+                    {
+                        tokenIds.Add(_vocab["<unk>"]);
+                        unknownTokens.Add(token);
+                    }
+                }
+            }
+
+            if (unknownTokens.Count > 0)
+            {
+                Console.WriteLine($"Unknown tokens encountered: {string.Join(", ", unknownTokens.Distinct())}");
+            }
+
+            return tokenIds;
+        }
+
+        public string Decode(List<int> tokenIds)
+        {
+            if (!_isLoaded) Load();
+
+            var tokens = tokenIds.Select(id => 
+                _idToToken.TryGetValue(id, out string token) ? token : "<unk>"
+            ).ToList();
+
+            var result = new StringBuilder();
+            var currentWord = new StringBuilder();
+
+            foreach (var token in tokens)
+            {
+                if (token == "</w>")
+                {
+                    if (currentWord.Length > 0)
+                    {
+                        result.Append(currentWord.ToString()).Append(' ');
+                        currentWord.Clear();
+                    }
+                }
+                else
+                {
+                    currentWord.Append(token);
+                }
+            }
+
+            // Add any remaining word
+            if (currentWord.Length > 0)
+            {
+                result.Append(currentWord.ToString()).Append(' ');
+            }
+
+            return result.ToString().Trim();
+        }
+
+        public int GetVocabSize()
+        {
+            if (!_isLoaded) Load();
+            return _vocab.Count;
+        }
+
+        private ConcurrentDictionary<(string, string), int> GetPairFrequenciesParallel(List<List<string>> corpus)
+        {
+            var pairs = new ConcurrentDictionary<(string, string), int>();
+
+            Parallel.ForEach(corpus, word =>
+            {
+                for (int i = 0; i < word.Count - 1; i++)
+                {
+                    var pair = (word[i], word[i + 1]);
+                    pairs.AddOrUpdate(pair, 1, (_, count) => count + 1);
+                }
+            });
+
+            return pairs;
+        }
+
+        private List<List<string>> MergePair((string, string) pair, List<List<string>> corpus)
+        {
+            var result = new List<List<string>>();
+
+            foreach (var word in corpus)
+            {
+                var newWord = new List<string>();
+                int i = 0;
+
+                while (i < word.Count)
+                {
+                    if (i < word.Count - 1 && (word[i], word[i + 1]) == pair)
+                    {
+                        newWord.Add(word[i] + word[i + 1]);
+                        i += 2;
+                    }
+                    else
+                    {
+                        newWord.Add(word[i]);
+                        i++;
+                    }
+                }
+                result.Add(newWord);
+            }
+
+            return result;
+        }
+
+        private List<string> ApplyMerges(List<string> tokens)
+        {
+            if (_merges.Count == 0) return tokens;
+
+            var currentTokens = new List<string>(tokens);
+
+            while (true)
+            {
+                var pairs = new List<((string, string) pair, int rank)>();
+                
+                for (int i = 0; i < currentTokens.Count - 1; i++)
+                {
+                    var pair = (currentTokens[i], currentTokens[i + 1]);
+                    if (_ranks.TryGetValue(pair, out int rank))
+                    {
+                        pairs.Add((pair, rank));
+                    }
+                }
+
+                if (pairs.Count == 0) break;
+
+                // Find the pair with the lowest rank (earliest merge)
+                var bestPair = pairs.OrderBy(p => p.rank).First().pair;
+
+                var newTokens = new List<string>();
+                int j = 0;
+
+                while (j < currentTokens.Count)
+                {
+                    if (j < currentTokens.Count - 1 && 
+                        (currentTokens[j], currentTokens[j + 1]) == bestPair)
+                    {
+                        newTokens.Add(currentTokens[j] + currentTokens[j + 1]);
+                        j += 2;
+                    }
+                    else
+                    {
+                        newTokens.Add(currentTokens[j]);
+                        j++;
+                    }
+                }
+
+                currentTokens = newTokens;
+            }
+
+            return currentTokens;
+        }
+
+        private string CleanText(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return string.Empty;
+
+            // Remove HTML tags
+            text = Regex.Replace(text, "<.*?>", string.Empty);
+            
+            // Remove URLs
+            text = Regex.Replace(text, @"https?://\S+|www\.\S+", string.Empty);
+            
+            // Remove extra whitespace and normalize
+            text = Regex.Replace(text, @"\s+", " ").Trim();
+            
+            // Convert to lowercase
+            text = text.ToLowerInvariant();
+
+            return text;
+        }
+    }
+}
+```
+
+3. Improved Embedding Service
+
+```csharp
+namespace LLM_Module_API.Services
+{
+    public class EmbeddingService : IEmbeddingService
+    {
+        private readonly int _vocabSize;
+        private readonly int _embeddingDim;
+        private readonly int _maxSeqLength;
+        private readonly float[,] _tokenEmbeddingMatrix;
+        private readonly float[,] _positionEmbeddingMatrix;
+        private readonly Random _rand = new Random();
+
+        public EmbeddingService(ITokeniserService tokeniserService, int embeddingDim = 512, int maxSeqLength = 2048)
+        {
+            _vocabSize = tokeniserService.GetVocabSize();
+            _embeddingDim = embeddingDim;
+            _maxSeqLength = maxSeqLength;
+
+            if (_vocabSize == 0)
+                throw new InvalidOperationException("Vocabulary size is zero. Train tokeniser first.");
+
+            _tokenEmbeddingMatrix = new float[_vocabSize, _embeddingDim];
+            _positionEmbeddingMatrix = new float[_maxSeqLength, _embeddingDim];
+
+            InitializeEmbeddings();
+        }
+
+        public EmbeddingService(int vocabSize, int embeddingDim = 512, int maxSeqLength = 2048)
+        {
+            _vocabSize = vocabSize;
+            _embeddingDim = embeddingDim;
+            _maxSeqLength = maxSeqLength;
+
+            _tokenEmbeddingMatrix = new float[_vocabSize, _embeddingDim];
+            _positionEmbeddingMatrix = new float[_maxSeqLength, _embeddingDim];
+
+            InitializeEmbeddings();
+        }
+
+        private void InitializeEmbeddings()
+        {
+            InitializeMatrix(_tokenEmbeddingMatrix);
+            InitializeMatrix(_positionEmbeddingMatrix);
+            Console.WriteLine($"Embedding matrices initialized: {_vocabSize} tokens, {_embeddingDim} dimensions");
+        }
+
+        private void InitializeMatrix(float[,] matrix)
+        {
+            double std = 1.0 / Math.Sqrt(_embeddingDim);
+            
+            for (int i = 0; i < matrix.GetLength(0); i++)
+            {
+                for (int j = 0; j < matrix.GetLength(1); j++)
+                {
+                    matrix[i, j] = (float)(SampleNormal() * std);
+                }
+            }
+        }
+
+        private double SampleNormal()
+        {
+            // Box-Muller transform for normal distribution
+            double u1 = 1.0 - _rand.NextDouble();
+            double u2 = 1.0 - _rand.NextDouble();
+            return Math.Sqrt(-2.0 * Math.Log(u1)) * Math.Cos(2.0 * Math.PI * u2);
+        }
+
+        public float[][] GetEmbeddings(List<int> tokenIds)
+        {
+            if (tokenIds == null || tokenIds.Count == 0)
+                throw new ArgumentException("Token IDs cannot be null or empty");
+
+            if (tokenIds.Count > _maxSeqLength)
+                throw new ArgumentException($"Sequence length {tokenIds.Count} exceeds maximum {_maxSeqLength}");
+
+            var embeddings = new float[tokenIds.Count][];
+
+            for (int i = 0; i < tokenIds.Count; i++)
+            {
+                int tokenId = tokenIds[i];
+                
+                if (tokenId < 0 || tokenId >= _vocabSize)
+                    throw new ArgumentException($"Token ID {tokenId} is out of vocabulary range [0, {_vocabSize - 1}]");
+
+                embeddings[i] = new float[_embeddingDim];
+
+                for (int j = 0; j < _embeddingDim; j++)
+                {
+                    // Combine token embedding with positional embedding
+                    embeddings[i][j] = _tokenEmbeddingMatrix[tokenId, j] + _positionEmbeddingMatrix[i, j];
+                }
+            }
+
+            return embeddings;
+        }
+
+        public int GetVocabSize() => _vocabSize;
+        public int GetEmbeddingDim() => _embeddingDim;
+    }
+}
+```
+
+4. Controllers (Fixed)
+
+```csharp
+using LLM_Module_API.Models;
+using LLM_Module_API.Services;
+using Microsoft.AspNetCore.Mvc;
+
+namespace LLM_Module_API.Controllers
+{
+    [Route("api/[controller]")]
+    [ApiController]
+    public class TokeniserController : ControllerBase
+    {
+        private readonly ITokeniserService _tokeniserService;
+        private readonly ILogger<TokeniserController> _logger;
+
+        public TokeniserController(ITokeniserService tokeniserService, ILogger<TokeniserController> logger)
+        {
+            _tokeniserService = tokeniserService;
+            _logger = logger;
+        }
+
+        [HttpPost("train")]
+        public async Task<IActionResult> Train()
+        {
+            try
+            {
+                _logger.LogInformation("Starting tokeniser training");
+                var vocab = _tokeniserService.TrainTokeniser();
+                
+                return Ok(new { 
+                    VocabSize = vocab.Count, 
+                    Message = "Tokeniser trained successfully",
+                    FirstTenTokens = vocab.Take(10).ToDictionary(kv => kv.Key, kv => kv.Value)
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error training tokeniser");
+                return StatusCode(500, new { Error = ex.Message });
+            }
+        }
+
+        [HttpGet("load")]
+        [ProducesResponseType(typeof(TokeniserLoadResponse), 200)]
+        public IActionResult Load()
+        {
+            try
+            {
+                var (vocab, idToToken, merges) = _tokeniserService.Load();
+                var mergeList = merges.Select(m => new MergePair { First = m.Item1, Second = m.Item2 }).ToList();
+                
+                return Ok(new TokeniserLoadResponse
+                {
+                    Vocab = vocab,
+                    IdToToken = idToToken,
+                    Merges = mergeList
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error loading tokeniser");
+                return StatusCode(500, new { Error = ex.Message });
+            }
+        }
+
+        [HttpPost("encode")]
+        public IActionResult Encode([FromBody] EncodeRequest request)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(request.Text))
+                    return BadRequest(new { Error = "Text cannot be null or empty" });
+
+                var tokenIds = _tokeniserService.Encode(request.Text);
+                return Ok(new { Text = request.Text, TokenIds = tokenIds, Length = tokenIds.Count });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error encoding text");
+                return StatusCode(500, new { Error = ex.Message });
+            }
+        }
+
+        [HttpPost("decode")]
+        public IActionResult Decode([FromBody] DecodeRequest request)
+        {
+            try
+            {
+                if (request.TokenIds == null || request.TokenIds.Count == 0)
+                    return BadRequest(new { Error = "Token IDs cannot be null or empty" });
+
+                var text = _tokeniserService.Decode(request.TokenIds);
+                return Ok(new { TokenIds = request.TokenIds, Text = text });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error decoding tokens");
+                return StatusCode(500, new { Error = ex.Message });
+            }
+        }
+
+        [HttpGet("vocabsize")]
+        public IActionResult VocabSize()
+        {
+            try
+            {
+                var size = _tokeniserService.GetVocabSize();
+                return Ok(new { VocabularySize = size });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting vocabulary size");
+                return StatusCode(500, new { Error = ex.Message });
+            }
+        }
+    }
+
+    public class EncodeRequest
+    {
+        public string Text { get; set; } = string.Empty;
+    }
+
+    public class DecodeRequest
+    {
+        public List<int> TokenIds { get; set; } = new List<int>();
+    }
+}
+
+[Route("api/[controller]")]
+[ApiController]
+public class EmbeddingController : ControllerBase
+{
+    private readonly IEmbeddingService _embeddingService;
+    private readonly ILogger<EmbeddingController> _logger;
+
+    public EmbeddingController(IEmbeddingService embeddingService, ILogger<EmbeddingController> logger)
+    {
+        _embeddingService = embeddingService;
+        _logger = logger;
+    }
+
+    [HttpPost("embed")]
+    public IActionResult GetEmbedding([FromBody] EmbedRequest request)
+    {
+        try
+        {
+            if (request.TokenIds == null || request.TokenIds.Count == 0)
+                return BadRequest(new { Error = "Token IDs cannot be null or empty" });
+
+            var embeddings = _embeddingService.GetEmbeddings(request.TokenIds);
+            
+            return Ok(new { 
+                Tokens = request.TokenIds, 
+                EmbeddingDimensions = $"{embeddings.Length}x{embeddings[0].Length}",
+                SampleEmbedding = embeddings.Length > 0 ? embeddings[0] : Array.Empty<float>()
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error generating embeddings");
+            return StatusCode(500, new { Error = ex.Message });
+        }
+    }
+
+    [HttpGet("info")]
+    public IActionResult GetInfo()
+    {
+        try
+        {
+            return Ok(new {
+                VocabularySize = _embeddingService.GetVocabSize(),
+                EmbeddingDimension = _embeddingService.GetEmbeddingDim()
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting embedding info");
+            return StatusCode(500, new { Error = ex.Message });
+        }
+    }
+}
+
+public class EmbedRequest
+{
+    public List<int> TokenIds { get; set; } = new List<int>();
+}
+```
+
+5. Program.cs Registration
+
+```csharp
+// In Program.cs
+builder.Services.AddScoped<ITokeniserService, TokeniserService>();
+builder.Services.AddScoped<IEmbeddingService>(provider =>
+{
+    var tokeniserService = provider.GetRequiredService<ITokeniserService>();
+    return new EmbeddingService(tokeniserService, embeddingDim: 512, maxSeqLength: 2048);
+});
+```
+
+Key Improvements Made:
+
+1. Fixed BPE Algorithm: Proper merge application and vocabulary building
+2. Error Handling: Comprehensive exception handling throughout
+3. Thread Safety: Added locking for concurrent access
+4. Input Validation: Proper validation for all inputs
+5. Logging: Added logging for debugging and monitoring
+6. Performance: Optimized data structures and algorithms
+7. API Design: Proper request/response models and HTTP status codes
+8. Memory Management: Better handling of large datasets
+9. Configuration: More flexible constructor parameters
+10. Documentation: Clear separation of concerns and responsibilities
+
+This code provides a solid foundation for an LLM tokeniser and embedding system without relying on third-party libraries.
