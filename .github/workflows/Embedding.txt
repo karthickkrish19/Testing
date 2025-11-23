@@ -1,0 +1,128 @@
+using System;
+using System.Collections.Generic;
+
+namespace LLM_Module_API.Services
+{
+    public class DynamicEmbeddingService : IEmbeddingService
+    {
+        private readonly int _vocabSize;
+        private readonly int _embeddingDim;
+        private readonly int _maxSeqLength;
+
+        private readonly float[,] _tokenEmbeddingMatrix; // Learned token embeddings
+        private readonly float[,] _ropeCos;              // Precomputed RoPE cos
+        private readonly float[,] _ropeSin;              // Precomputed RoPE sin
+
+        private readonly Random _rand = new Random();
+
+        public DynamicEmbeddingService(int vocabSize, int embeddingDim = 512, int maxSeqLength = 2048)
+        {
+            _vocabSize = vocabSize;
+            _embeddingDim = embeddingDim;
+            _maxSeqLength = maxSeqLength;
+
+            _tokenEmbeddingMatrix = new float[_vocabSize, _embeddingDim];
+            _ropeCos = new float[_maxSeqLength, _embeddingDim / 2];
+            _ropeSin = new float[_maxSeqLength, _embeddingDim / 2];
+
+            InitializeTokenEmbeddings();
+            InitializeRoPE();
+        }
+
+        // ------------------------
+        // 1. Initialize Token Embeddings
+        // ------------------------
+        private void InitializeTokenEmbeddings()
+        {
+            double std = 1.0 / Math.Sqrt(_embeddingDim);
+            for (int i = 0; i < _vocabSize; i++)
+            {
+                for (int j = 0; j < _embeddingDim; j++)
+                {
+                    _tokenEmbeddingMatrix[i, j] = (float)(SampleNormal() * std);
+                }
+            }
+        }
+
+        private double SampleNormal()
+        {
+            double u1 = 1.0 - _rand.NextDouble();
+            double u2 = 1.0 - _rand.NextDouble();
+            return Math.Sqrt(-2.0 * Math.Log(u1)) * Math.Cos(2.0 * Math.PI * u2);
+        }
+
+        // ------------------------
+        // 2. Initialize RoPE (Rotary Positional Encoding)
+        // ------------------------
+        private void InitializeRoPE()
+        {
+            int half = _embeddingDim / 2;
+            for (int pos = 0; pos < _maxSeqLength; pos++)
+            {
+                for (int i = 0; i < half; i++)
+                {
+                    double theta = 1.0 / Math.Pow(10000, (2.0 * i) / _embeddingDim);
+                    double angle = pos * theta;
+                    _ropeCos[pos, i] = (float)Math.Cos(angle);
+                    _ropeSin[pos, i] = (float)Math.Sin(angle);
+                }
+            }
+        }
+
+        // ------------------------
+        // 3. Get token embeddings dynamically for a batch of sequences
+        // ------------------------
+        public float[][][] GetBatchEmbeddings(List<List<int>> batchTokenIds)
+        {
+            int batchSize = batchTokenIds.Count;
+            float[][][] batchEmbeddings = new float[batchSize][][];
+
+            for (int b = 0; b < batchSize; b++)
+            {
+                var seq = batchTokenIds[b];
+                int seqLen = seq.Count;
+                batchEmbeddings[b] = new float[seqLen][];
+
+                for (int t = 0; t < seqLen; t++)
+                {
+                    int tokenId = seq[t];
+                    batchEmbeddings[b][t] = new float[_embeddingDim];
+
+                    for (int j = 0; j < _embeddingDim; j++)
+                    {
+                        batchEmbeddings[b][t][j] = _tokenEmbeddingMatrix[tokenId, j];
+                    }
+                }
+            }
+
+            return batchEmbeddings;
+        }
+
+        // ------------------------
+        // 4. Apply RoPE dynamically to Q/K vectors per token position
+        // ------------------------
+        public void ApplyRoPE(float[][] sequenceVectors)
+        {
+            int seqLen = sequenceVectors.Length;
+            for (int pos = 0; pos < seqLen; pos++)
+            {
+                float[] vector = sequenceVectors[pos];
+                int half = _embeddingDim / 2;
+
+                for (int i = 0; i < half; i++)
+                {
+                    float x1 = vector[i];
+                    float x2 = vector[i + half];
+                    float cos = _ropeCos[pos, i];
+                    float sin = _ropeSin[pos, i];
+
+                    vector[i]       = x1 * cos - x2 * sin;
+                    vector[i + half] = x1 * sin + x2 * cos;
+                }
+            }
+        }
+
+        public int GetVocabSize() => _vocabSize;
+        public int GetEmbeddingDim() => _embeddingDim;
+    }
+}
