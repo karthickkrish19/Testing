@@ -1,0 +1,918 @@
+namespace LLM_Module_API.Models
+{
+    public class EmbedRequest
+    {
+        public List<List<int>> TokenIds { get; set; } = new List<List<int>>();
+    }
+}
+namespace LLM_Module_API.Models
+{
+    public class PlotRequest
+    {
+        public float[][] Points { get; set; }
+        public int[] TokenIds { get; set; }
+    }
+}
+namespace LLM_Module_API.Models
+{
+    public class TokeniserLoadResponse
+    {
+        public Dictionary<string, int> Vocab { get; set; } = new();
+        public Dictionary<int, string> IdToToken { get; set; } = new();
+        public List<MergePair> Merges { get; set; } = new();
+    }
+
+    public class MergePair
+    {
+        public string First { get; set; } = string.Empty;
+        public string Second { get; set; } = string.Empty;
+    }
+}
+using System;
+using System.Collections.Generic;
+
+namespace LLM_Module_API.Services
+{
+    public class EmbeddingService : IEmbeddingService
+    {
+        private readonly int _vocabSize;
+        private readonly int _embeddingDim;
+        private readonly int _maxSeqLength;
+
+        private readonly float[,] _tokenEmbeddingMatrix; // Learned token embeddings
+        private readonly float[,] _ropeCos;              // Precomputed RoPE cos
+        private readonly float[,] _ropeSin;              // Precomputed RoPE sin
+
+        private readonly Random _rand = new Random();
+
+        public EmbeddingService(int vocabSize, int embeddingDim = 512, int maxSeqLength = 2048)
+        {
+            _vocabSize = vocabSize;
+            _embeddingDim = embeddingDim;
+            _maxSeqLength = maxSeqLength;
+
+            _tokenEmbeddingMatrix = new float[_vocabSize, _embeddingDim];
+            _ropeCos = new float[_maxSeqLength, _embeddingDim / 2];
+            _ropeSin = new float[_maxSeqLength, _embeddingDim / 2];
+
+            InitializeTokenEmbeddings();
+            InitializeRoPE();
+        }
+
+        // ------------------------
+        // 1. Initialize Token Embeddings
+        // ------------------------
+        private void InitializeTokenEmbeddings()
+        {
+            double std = 1.0 / Math.Sqrt(_embeddingDim);
+            for (int i = 0; i < _vocabSize; i++)
+            {
+                for (int j = 0; j < _embeddingDim; j++)
+                {
+                    _tokenEmbeddingMatrix[i, j] = (float)(SampleNormal() * std);
+                }
+            }
+        }
+
+        private double SampleNormal()
+        {
+            double u1 = 1.0 - _rand.NextDouble();
+            double u2 = 1.0 - _rand.NextDouble();
+            return Math.Sqrt(-2.0 * Math.Log(u1)) * Math.Cos(2.0 * Math.PI * u2);
+        }
+
+        // ------------------------
+        // 2. Initialize RoPE (Rotary Positional Encoding)
+        // ------------------------
+        private void InitializeRoPE()
+        {
+            int half = _embeddingDim / 2;
+            for (int pos = 0; pos < _maxSeqLength; pos++)
+            {
+                for (int i = 0; i < half; i++)
+                {
+                    double theta = 1.0 / Math.Pow(10000, (2.0 * i) / _embeddingDim);
+                    double angle = pos * theta;
+                    _ropeCos[pos, i] = (float)Math.Cos(angle);
+                    _ropeSin[pos, i] = (float)Math.Sin(angle);
+                }
+            }
+        }
+
+        // ------------------------
+        // 3. Get token embeddings dynamically for a batch of sequences
+        // ------------------------
+        public float[][][] GetBatchEmbeddings(List<List<int>> batchTokenIds)
+        {
+            int batchSize = batchTokenIds.Count;
+            float[][][] batchEmbeddings = new float[batchSize][][];
+
+            for (int b = 0; b < batchSize; b++)
+            {
+                var seq = batchTokenIds[b];
+                int seqLen = seq.Count;
+                batchEmbeddings[b] = new float[seqLen][];
+
+                for (int t = 0; t < seqLen; t++)
+                {
+                    int tokenId = seq[t];
+                    batchEmbeddings[b][t] = new float[_embeddingDim];
+
+                    for (int j = 0; j < _embeddingDim; j++)
+                    {
+                        batchEmbeddings[b][t][j] = _tokenEmbeddingMatrix[tokenId, j];
+                    }
+                }
+            }
+
+            return batchEmbeddings;
+        }
+
+        // ------------------------
+        // 4. Apply RoPE dynamically to Q/K vectors per token position
+        // ------------------------
+        public void ApplyRoPE(float[][] sequenceVectors)
+        {
+            int seqLen = sequenceVectors.Length;
+            for (int pos = 0; pos < seqLen; pos++)
+            {
+                float[] vector = sequenceVectors[pos];
+                int half = _embeddingDim / 2;
+
+                for (int i = 0; i < half; i++)
+                {
+                    float x1 = vector[i];
+                    float x2 = vector[i + half];
+                    float cos = _ropeCos[pos, i];
+                    float sin = _ropeSin[pos, i];
+
+                    vector[i] = x1 * cos - x2 * sin;
+                    vector[i + half] = x1 * sin + x2 * cos;
+                }
+            }
+        }
+
+        public int GetVocabSize() => _vocabSize;
+        public int GetEmbeddingDim() => _embeddingDim;
+    }
+}
+namespace LLM_Module_API.Services
+{
+    public interface IEmbeddingService
+    {
+        float[][][] GetBatchEmbeddings(List<List<int>> batchTokenIds);
+        void ApplyRoPE(float[][] sequenceVectors);
+        int GetVocabSize();
+        int GetEmbeddingDim();
+    }
+}
+namespace LLM_Module_API.Services
+{
+    public interface ITokeniserService
+    {
+        Dictionary<string, int> TrainTokeniser();
+        List<int> Encode(string text);
+        int GetVocabSize();
+        (Dictionary<string, int> Vocab, Dictionary<int, string> IdToToken, List<(string, string)> Merges) Load();
+        string Decode(List<int> tokenIds);
+
+    }
+}
+using System.Collections.Concurrent;
+using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+
+namespace LLM_Module_API.Services
+{
+    public class TokeniserService : ITokeniserService
+    {
+        private readonly string _inputDir;
+        private readonly string _outputDir;
+        private readonly string _textFilePath;
+        private readonly int _vocabSize = 50000;
+        private readonly List<string> _specialTokens = new() { "<unk>", "<pad>", "<bos>", "<eos>", "</w>" };
+
+        private Dictionary<string, int> _vocab = new();
+        private Dictionary<int, string> _idToToken = new();
+        private List<(string, string)> _merges = new();
+        private Dictionary<(string, string), int> _ranks = new();
+        private bool _isLoaded = false;
+        private readonly object _lockObject = new object();
+
+        public TokeniserService(IWebHostEnvironment env)
+        {
+            _inputDir = Path.Combine(env.WebRootPath, "data", "input");
+            _outputDir = Path.Combine(env.WebRootPath, "data", "output");
+            _textFilePath = Path.Combine(_inputDir, "sampleinput.txt");
+
+            // Create directories if they don't exist
+            Directory.CreateDirectory(_inputDir);
+            Directory.CreateDirectory(_outputDir);
+        }
+
+        public Dictionary<string, int> TrainTokeniser()
+        {
+            if (!File.Exists(_textFilePath))
+                throw new FileNotFoundException($"Input file not found: {_textFilePath}");
+
+            string content = File.ReadAllText(_textFilePath);
+            string cleanedText = CleanText(content);
+
+            if (string.IsNullOrEmpty(cleanedText))
+                throw new InvalidOperationException("No valid text content after cleaning");
+
+            // Split into words and convert to character tokens
+            var tokenLists = cleanedText
+                .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                .Where(word => !string.IsNullOrEmpty(word))
+                .Select(word => word.Select(c => c.ToString()).ToList())
+                .ToList();
+
+            var corpus = tokenLists;
+            var tokenSet = new HashSet<string>();
+
+            // Initialize with character tokens
+            foreach (var word in corpus)
+            {
+                foreach (var token in word)
+                {
+                    tokenSet.Add(token);
+                }
+            }
+
+            int mergeCount = 0;
+            int maxMerges = _vocabSize - _specialTokens.Count - tokenSet.Count;
+
+            while (tokenSet.Count < _vocabSize && mergeCount < maxMerges)
+            {
+                var pairFreqs = GetPairFrequenciesParallel(corpus);
+                if (pairFreqs.Count == 0) break;
+
+                var bestPair = pairFreqs.OrderByDescending(pair => pair.Value).First().Key;
+                _merges.Add(bestPair);
+
+                // Update corpus with merged pairs
+                corpus = MergePair(bestPair, corpus);
+
+                // Update token set
+                tokenSet.Clear();
+                foreach (var word in corpus)
+                {
+                    foreach (var token in word)
+                    {
+                        tokenSet.Add(token);
+                    }
+                }
+
+                mergeCount++;
+
+                if (mergeCount % 1000 == 0)
+                {
+                    Console.WriteLine($"Completed {mergeCount} merges, vocabulary size: {tokenSet.Count}");
+                }
+            }
+
+            BuildVocabulary(tokenSet);
+            SaveTokeniserAsync().Wait();
+            _isLoaded = true;
+
+            Console.WriteLine($"Training completed. Final vocabulary size: {_vocab.Count}");
+            return _vocab;
+        }
+
+        private void BuildVocabulary(HashSet<string> tokenSet)
+        {
+            _vocab.Clear();
+            _idToToken.Clear();
+            _ranks.Clear();
+
+            // Add special tokens first
+            int id = 0;
+            foreach (var token in _specialTokens)
+            {
+                _vocab[token] = id;
+                _idToToken[id] = token;
+                id++;
+            }
+
+            // Add regular tokens
+            foreach (var token in tokenSet.OrderBy(t => t))
+            {
+                if (!_vocab.ContainsKey(token))
+                {
+                    _vocab[token] = id;
+                    _idToToken[id] = token;
+                    id++;
+                }
+            }
+
+            // Build ranks for merges
+            for (int i = 0; i < _merges.Count; i++)
+            {
+                _ranks[_merges[i]] = i;
+            }
+        }
+
+        private async Task SaveTokeniserAsync()
+        {
+            try
+            {
+                if (!Directory.Exists(_outputDir))
+                    Directory.CreateDirectory(_outputDir);
+
+                var vocabJson = JsonSerializer.Serialize(_vocab, new JsonSerializerOptions { WriteIndented = true });
+                await File.WriteAllTextAsync(Path.Combine(_outputDir, "vocab.json"), vocabJson);
+
+                var mergeLines = new List<string> { "#v1.0" };
+                mergeLines.AddRange(_merges.Select(m => $"{m.Item1} {m.Item2}"));
+                await File.WriteAllLinesAsync(Path.Combine(_outputDir, "merges.txt"), mergeLines);
+
+                Console.WriteLine("Tokeniser saved successfully");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error saving tokeniser: {ex.Message}");
+                throw;
+            }
+        }
+
+        public (Dictionary<string, int> Vocab, Dictionary<int, string> IdToToken, List<(string, string)> Merges) Load()
+        {
+            lock (_lockObject)
+            {
+                if (!_isLoaded)
+                {
+                    var vocabPath = Path.Combine(_outputDir, "vocab.json");
+                    var mergesPath = Path.Combine(_outputDir, "merges.txt");
+
+                    if (!File.Exists(vocabPath) || !File.Exists(mergesPath))
+                        throw new FileNotFoundException("Tokeniser files not found. Train the tokeniser first.");
+
+                    try
+                    {
+                        _vocab = JsonSerializer.Deserialize<Dictionary<string, int>>(
+                            File.ReadAllText(vocabPath)) ?? new Dictionary<string, int>();
+
+                        _idToToken = _vocab.ToDictionary(kv => kv.Value, kv => kv.Key);
+
+                        var lines = File.ReadAllLines(mergesPath).Skip(1); // Skip version header
+                        _merges = lines
+                            .Where(line => !string.IsNullOrWhiteSpace(line))
+                            .Select(l =>
+                            {
+                                var parts = l.Split(' ', 2);
+                                return (parts[0], parts[1]);
+                            })
+                            .ToList();
+
+                        _ranks = _merges.Select((m, i) => new { m, i })
+                                       .ToDictionary(x => x.m, x => x.i);
+
+                        _isLoaded = true;
+                        Console.WriteLine("Tokeniser loaded successfully");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Error loading tokeniser: {ex.Message}");
+                        throw;
+                    }
+                }
+                return (_vocab, _idToToken, _merges);
+            }
+        }
+
+        public List<int> Encode(string text)
+        {
+            if (!_isLoaded) Load();
+
+            var cleanedText = CleanText(text);
+            var tokenIds = new List<int>();
+            var unknownTokens = new List<string>();
+
+            foreach (var word in cleanedText.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (string.IsNullOrEmpty(word)) continue;
+
+                var tokens = word.Select(c => c.ToString()).ToList();
+                tokens.Add("</w>"); // Add word ending token
+
+                var mergedTokens = ApplyMerges(tokens);
+
+                foreach (var token in mergedTokens)
+                {
+                    if (_vocab.TryGetValue(token, out int tokenId))
+                    {
+                        tokenIds.Add(tokenId);
+                    }
+                    else
+                    {
+                        tokenIds.Add(_vocab["<unk>"]);
+                        unknownTokens.Add(token);
+                    }
+                }
+            }
+
+            if (unknownTokens.Count > 0)
+            {
+                Console.WriteLine($"Unknown tokens encountered: {string.Join(", ", unknownTokens.Distinct())}");
+            }
+
+            return tokenIds;
+        }
+
+        public string Decode(List<int> tokenIds)
+        {
+            if (!_isLoaded) Load();
+
+            var tokens = tokenIds.Select(id =>
+                _idToToken.TryGetValue(id, out string token) ? token : "<unk>"
+            ).ToList();
+
+            var result = new StringBuilder();
+            var currentWord = new StringBuilder();
+
+            foreach (var token in tokens)
+            {
+                if (token == "</w>")
+                {
+                    if (currentWord.Length > 0)
+                    {
+                        result.Append(currentWord.ToString()).Append(' ');
+                        currentWord.Clear();
+                    }
+                }
+                else
+                {
+                    currentWord.Append(token);
+                }
+            }
+
+            // Add any remaining word
+            if (currentWord.Length > 0)
+            {
+                result.Append(currentWord.ToString()).Append(' ');
+            }
+
+            return result.ToString().Trim();
+        }
+
+        public int GetVocabSize()
+        {
+            if (!_isLoaded) Load();
+            return _vocab.Count;
+        }
+
+        private ConcurrentDictionary<(string, string), int> GetPairFrequenciesParallel(List<List<string>> corpus)
+        {
+            var pairs = new ConcurrentDictionary<(string, string), int>();
+
+            Parallel.ForEach(corpus, word =>
+            {
+                for (int i = 0; i < word.Count - 1; i++)
+                {
+                    var pair = (word[i], word[i + 1]);
+                    pairs.AddOrUpdate(pair, 1, (_, count) => count + 1);
+                }
+            });
+
+            return pairs;
+        }
+
+        private List<List<string>> MergePair((string, string) pair, List<List<string>> corpus)
+        {
+            var result = new List<List<string>>();
+
+            foreach (var word in corpus)
+            {
+                var newWord = new List<string>();
+                int i = 0;
+
+                while (i < word.Count)
+                {
+                    if (i < word.Count - 1 && (word[i], word[i + 1]) == pair)
+                    {
+                        newWord.Add(word[i] + word[i + 1]);
+                        i += 2;
+                    }
+                    else
+                    {
+                        newWord.Add(word[i]);
+                        i++;
+                    }
+                }
+                result.Add(newWord);
+            }
+
+            return result;
+        }
+
+        private List<string> ApplyMerges(List<string> tokens)
+        {
+            if (_merges.Count == 0) return tokens;
+
+            var currentTokens = new List<string>(tokens);
+
+            while (true)
+            {
+                var pairs = new List<((string, string) pair, int rank)>();
+
+                for (int i = 0; i < currentTokens.Count - 1; i++)
+                {
+                    var pair = (currentTokens[i], currentTokens[i + 1]);
+                    if (_ranks.TryGetValue(pair, out int rank))
+                    {
+                        pairs.Add((pair, rank));
+                    }
+                }
+
+                if (pairs.Count == 0) break;
+
+                // Find the pair with the lowest rank (earliest merge)
+                var bestPair = pairs.OrderBy(p => p.rank).First().pair;
+
+                var newTokens = new List<string>();
+                int j = 0;
+
+                while (j < currentTokens.Count)
+                {
+                    if (j < currentTokens.Count - 1 &&
+                        (currentTokens[j], currentTokens[j + 1]) == bestPair)
+                    {
+                        newTokens.Add(currentTokens[j] + currentTokens[j + 1]);
+                        j += 2;
+                    }
+                    else
+                    {
+                        newTokens.Add(currentTokens[j]);
+                        j++;
+                    }
+                }
+
+                currentTokens = newTokens;
+            }
+
+            return currentTokens;
+        }
+
+        private string CleanText(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return string.Empty;
+
+            // Remove HTML tags
+            text = Regex.Replace(text, "<.*?>", string.Empty);
+
+            // Remove URLs
+            text = Regex.Replace(text, @"https?://\S+|www\.\S+", string.Empty);
+
+            // Remove extra whitespace and normalize
+            text = Regex.Replace(text, @"\s+", " ").Trim();
+
+            // Convert to lowercase
+            text = text.ToLowerInvariant();
+
+            return text;
+        }
+    }
+}
+  
+using LLM_Module_API.Services;
+
+namespace LLM_Module_API
+{
+    public class Program
+    {
+        public static void Main(string[] args)
+        {
+            var builder = WebApplication.CreateBuilder(args);
+
+            // Add services to the container.
+            builder.Services.AddSingleton<ITokeniserService, TokeniserService>();
+            builder.Services.AddSingleton<IEmbeddingService>(sp =>
+            {
+                var tokeniser = sp.GetRequiredService<ITokeniserService>();
+                int vocabSize = tokeniser.GetVocabSize();
+                int embeddingDim = 3;
+                int maxSeqLength = 512;
+                return new EmbeddingService(vocabSize, embeddingDim, maxSeqLength);
+            });
+            builder.Services.AddControllers();
+            // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
+            builder.Services.AddEndpointsApiExplorer();
+            builder.Services.AddSwaggerGen();
+
+            var app = builder.Build();
+
+            // Configure the HTTP request pipeline.
+            if (app.Environment.IsDevelopment())
+            {
+                app.UseSwagger();
+                app.UseSwaggerUI();
+            }
+
+            app.UseStaticFiles();
+
+            app.UseHttpsRedirection();
+
+            app.UseAuthorization();
+
+
+            app.MapControllers();
+
+            app.Run();
+        }
+    }
+}
+using LLM_Module_API.Models;
+using LLM_Module_API.Services;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+
+namespace LLM_Module_API.Controllers
+{
+    [Route("api/[controller]")]
+    [ApiController]
+    public class EmbeddingController : ControllerBase
+    {
+        private readonly IEmbeddingService _embeddingService;
+        private readonly ILogger<EmbeddingController> _logger;
+
+        public EmbeddingController(IEmbeddingService embeddingService, ILogger<EmbeddingController> logger)
+        {
+            _embeddingService = embeddingService;
+            _logger = logger;
+        }
+
+        [HttpPost("embed")]
+        public IActionResult GetEmbedding([FromBody] EmbedRequest request)
+        {
+            try
+            {
+                if (request.TokenIds == null || request.TokenIds.Count == 0)
+                    return BadRequest(new { Error = "Token IDs cannot be null or empty" });
+
+                var embeddings = _embeddingService.GetBatchEmbeddings(request.TokenIds);
+
+                // Apply RoPE to each sequence
+                foreach (var sequence in embeddings)
+                    _embeddingService.ApplyRoPE(sequence);
+
+
+                int batchSize = embeddings.Length;
+                int seqLength = embeddings[0].Length;
+                int embeddingDim = embeddings[0][0].Length;
+
+
+                return Ok(new
+                {
+                    Tokens = request.TokenIds,
+                    EmbeddingDimensions = $"{batchSize}x{seqLength}x{embeddingDim}",
+                    SampleEmbedding = embeddings
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error generating embeddings");
+                return StatusCode(500, new { Error = ex.Message });
+            }
+        }
+
+        [HttpGet("info")]
+        public IActionResult GetInfo()
+        {
+            try
+            {
+                return Ok(new
+                {
+                    VocabularySize = _embeddingService.GetVocabSize(),
+                    EmbeddingDimension = _embeddingService.GetEmbeddingDim()
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting embedding info");
+                return StatusCode(500, new { Error = ex.Message });
+            }
+        }
+    }
+}
+using LLM_Module_API.Models;
+using LLM_Module_API.Services;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+
+namespace LLM_Module_API.Controllers
+{
+    [Route("api/[controller]")]
+    [ApiController]
+    public class TokeniserController : ControllerBase
+    {
+        private readonly ITokeniserService _tokeniserService;
+        private readonly ILogger<TokeniserController> _logger;
+
+        public TokeniserController(ITokeniserService tokeniserService, ILogger<TokeniserController> logger)
+        {
+            _tokeniserService = tokeniserService;
+            _logger = logger;
+        }
+
+        [HttpPost("train")]
+        public async Task<IActionResult> Train()
+        {
+            try
+            {
+                _logger.LogInformation("Starting tokeniser training");
+                var vocab = _tokeniserService.TrainTokeniser();
+
+                return Ok(new
+                {
+                    VocabSize = vocab.Count,
+                    Message = "Tokeniser trained successfully",
+                    FirstTenTokens = vocab.Take(10).ToDictionary(kv => kv.Key, kv => kv.Value)
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error training tokeniser");
+                return StatusCode(500, new { Error = ex.Message });
+            }
+        }
+
+        [HttpGet("load")]
+        [ProducesResponseType(typeof(TokeniserLoadResponse), 200)]
+        public IActionResult Load()
+        {
+            try
+            {
+                var (vocab, idToToken, merges) = _tokeniserService.Load();
+                var mergeList = merges.Select(m => new MergePair { First = m.Item1, Second = m.Item2 }).ToList();
+
+                return Ok(new TokeniserLoadResponse
+                {
+                    Vocab = vocab,
+                    IdToToken = idToToken,
+                    Merges = mergeList
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error loading tokeniser");
+                return StatusCode(500, new { Error = ex.Message });
+            }
+        }
+
+        [HttpPost("encode")]
+        public IActionResult Encode([FromBody] EncodeRequest request)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(request.Text))
+                    return BadRequest(new { Error = "Text cannot be null or empty" });
+
+                var tokenIds = _tokeniserService.Encode(request.Text);
+                return Ok(new { Text = request.Text, TokenIds = tokenIds, Length = tokenIds.Count });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error encoding text");
+                return StatusCode(500, new { Error = ex.Message });
+            }
+        }
+
+        [HttpPost("decode")]
+        public IActionResult Decode([FromBody] DecodeRequest request)
+        {
+            try
+            {
+                if (request.TokenIds == null || request.TokenIds.Count == 0)
+                    return BadRequest(new { Error = "Token IDs cannot be null or empty" });
+
+                var text = _tokeniserService.Decode(request.TokenIds);
+                return Ok(new { TokenIds = request.TokenIds, Text = text });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error decoding tokens");
+                return StatusCode(500, new { Error = ex.Message });
+            }
+        }
+
+        [HttpGet("vocabsize")]
+        public IActionResult VocabSize()
+        {
+            try
+            {
+                var size = _tokeniserService.GetVocabSize();
+                return Ok(new { VocabularySize = size });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting vocabulary size");
+                return StatusCode(500, new { Error = ex.Message });
+            }
+        }
+    }
+
+    public class EncodeRequest
+    {
+        public string Text { get; set; } = string.Empty;
+    }
+
+    public class DecodeRequest
+    {
+        public List<int> TokenIds { get; set; } = new List<int>();
+    }
+}
+
+using Microsoft.AspNetCore.Mvc;
+using System.Text;
+using System.Linq;
+using LLM_Module_API.Models;
+
+namespace SvgChartApi.Controllers
+{
+    [Route("api/[controller]")]
+    [ApiController]
+    public class PlotController : ControllerBase
+    {
+
+        [HttpPost("scatter-svg")]
+        public IActionResult GetScatterPlotSvg([FromBody] PlotRequest request)
+        {
+            if (request.Points == null || request.TokenIds == null)
+                return BadRequest("Points and TokenIds are required.");
+
+            if (request.Points.Length != request.TokenIds.Length)
+                return BadRequest("Number of points and token IDs must match.");
+
+            var projectedPoints = request.Points.Select(p => new float[] { p[0], p[1] }).ToArray();
+            string svg = GenerateScatterPlotSvg(projectedPoints, request.TokenIds);
+            return File(Encoding.UTF8.GetBytes(svg), "image/svg+xml", "scatterplot.svg");
+        }
+
+        private string GenerateScatterPlotSvg(float[][] points, int[] tokenIds)
+        {
+            int width = 800;
+            int height = 600;
+            int margin = 50;
+
+            float minX = points.Min(p => p[0]);
+            float maxX = points.Max(p => p[0]);
+            float minY = points.Min(p => p[1]);
+            float maxY = points.Max(p => p[1]);
+
+            // Add padding
+            float paddingX = 0.05f * (maxX - minX);
+            float paddingY = 0.05f * (maxY - minY);
+            minX -= paddingX; maxX += paddingX;
+            minY -= paddingY; maxY += paddingY;
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"<svg width='{width}' height='{height}' xmlns='http://www.w3.org/2000/svg'>");
+            sb.AppendLine("<rect width='100%' height='100%' fill='white'/>");
+
+            // Zero position
+            float zeroX = margin + (0 - minX) / (maxX - minX) * (width - 2 * margin);
+            float zeroY = height - margin - (0 - minY) / (maxY - minY) * (height - 2 * margin);
+
+            // Axes
+            sb.AppendLine($"<line x1='{margin}' y1='{zeroY}' x2='{width - margin}' y2='{zeroY}' stroke='black' stroke-width='1'/>");
+            sb.AppendLine($"<line x1='{zeroX}' y1='{margin}' x2='{zeroX}' y2='{height - margin}' stroke='black' stroke-width='1'/>");
+
+            // Tick marks and labels
+            int ticks = 5;
+            for (int i = 0; i <= ticks; i++)
+            {
+                float xVal = minX + i * (maxX - minX) / ticks;
+                float yVal = minY + i * (maxY - minY) / ticks;
+
+                float gx = margin + i * (width - 2 * margin) / ticks;
+                float gy = height - margin - i * (height - 2 * margin) / ticks;
+
+                // Grid lines
+                sb.AppendLine($"<line x1='{gx}' y1='{margin}' x2='{gx}' y2='{height - margin}' stroke='#ddd'/>");
+                sb.AppendLine($"<line x1='{margin}' y1='{gy}' x2='{width - margin}' y2='{gy}' stroke='#ddd'/>");
+
+                // Labels
+                sb.AppendLine($"<text x='{gx - 15}' y='{zeroY + 15}' font-size='12'>{xVal:F2}</text>");
+                sb.AppendLine($"<text x='{zeroX + 10}' y='{gy + 5}' font-size='12'>{yVal:F2}</text>");
+            }
+
+            // Points
+            for (int i = 0; i < points.Length; i++)
+            {
+                float normX = margin + (points[i][0] - minX) / (maxX - minX) * (width - 2 * margin);
+                float normY = height - margin - (points[i][1] - minY) / (maxY - minY) * (height - 2 * margin);
+
+                sb.AppendLine($"<circle cx='{normX}' cy='{normY}' r='4' fill='blue'/>");
+                sb.AppendLine($"<text x='{normX + 6}' y='{normY - 6}' font-size='12' fill='red'>ID {tokenIds[i]}</text>");
+            }
+
+            sb.AppendLine("</svg>");
+            return sb.ToString();
+        }
+    }
+}
+
