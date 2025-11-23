@@ -1,0 +1,99 @@
+namespace LLM_Module_API.Models
+{
+    public class PlotRequest
+    {
+        public float[][] Points { get; set; }
+        public int[] TokenIds { get; set; }
+    }
+}
+
+
+using Microsoft.AspNetCore.Mvc;
+using System.Text;
+using System.Linq;
+using LLM_Module_API.Models;
+
+namespace SvgChartApi.Controllers
+{
+    [Route("api/[controller]")]
+    [ApiController]
+    public class PlotController : ControllerBase
+    {
+
+        [HttpPost("scatter-svg")]
+        public IActionResult GetScatterPlotSvg([FromBody] PlotRequest request)
+        {
+            if (request.Points == null || request.TokenIds == null)
+                return BadRequest("Points and TokenIds are required.");
+
+            if (request.Points.Length != request.TokenIds.Length)
+                return BadRequest("Number of points and token IDs must match.");
+
+            var projectedPoints = request.Points.Select(p => new float[] { p[0], p[1] }).ToArray();
+            string svg = GenerateScatterPlotSvg(projectedPoints, request.TokenIds);
+            return File(Encoding.UTF8.GetBytes(svg), "image/svg+xml", "scatterplot.svg");
+        }
+
+        private string GenerateScatterPlotSvg(float[][] points, int[] tokenIds)
+        {
+            int width = 800;
+            int height = 600;
+            int margin = 50;
+
+            float minX = points.Min(p => p[0]);
+            float maxX = points.Max(p => p[0]);
+            float minY = points.Min(p => p[1]);
+            float maxY = points.Max(p => p[1]);
+
+            // Add padding
+            float paddingX = 0.05f * (maxX - minX);
+            float paddingY = 0.05f * (maxY - minY);
+            minX -= paddingX; maxX += paddingX;
+            minY -= paddingY; maxY += paddingY;
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"<svg width='{width}' height='{height}' xmlns='http://www.w3.org/2000/svg'>");
+            sb.AppendLine("<rect width='100%' height='100%' fill='white'/>");
+
+            // Zero position
+            float zeroX = margin + (0 - minX) / (maxX - minX) * (width - 2 * margin);
+            float zeroY = height - margin - (0 - minY) / (maxY - minY) * (height - 2 * margin);
+
+            // Axes
+            sb.AppendLine($"<line x1='{margin}' y1='{zeroY}' x2='{width - margin}' y2='{zeroY}' stroke='black' stroke-width='1'/>");
+            sb.AppendLine($"<line x1='{zeroX}' y1='{margin}' x2='{zeroX}' y2='{height - margin}' stroke='black' stroke-width='1'/>");
+
+            // Tick marks and labels
+            int ticks = 5;
+            for (int i = 0; i <= ticks; i++)
+            {
+                float xVal = minX + i * (maxX - minX) / ticks;
+                float yVal = minY + i * (maxY - minY) / ticks;
+
+                float gx = margin + i * (width - 2 * margin) / ticks;
+                float gy = height - margin - i * (height - 2 * margin) / ticks;
+
+                // Grid lines
+                sb.AppendLine($"<line x1='{gx}' y1='{margin}' x2='{gx}' y2='{height - margin}' stroke='#ddd'/>");
+                sb.AppendLine($"<line x1='{margin}' y1='{gy}' x2='{width - margin}' y2='{gy}' stroke='#ddd'/>");
+
+                // Labels
+                sb.AppendLine($"<text x='{gx - 15}' y='{zeroY + 15}' font-size='12'>{xVal:F2}</text>");
+                sb.AppendLine($"<text x='{zeroX + 10}' y='{gy + 5}' font-size='12'>{yVal:F2}</text>");
+            }
+
+            // Points
+            for (int i = 0; i < points.Length; i++)
+            {
+                float normX = margin + (points[i][0] - minX) / (maxX - minX) * (width - 2 * margin);
+                float normY = height - margin - (points[i][1] - minY) / (maxY - minY) * (height - 2 * margin);
+
+                sb.AppendLine($"<circle cx='{normX}' cy='{normY}' r='4' fill='blue'/>");
+                sb.AppendLine($"<text x='{normX + 6}' y='{normY - 6}' font-size='12' fill='red'>ID {tokenIds[i]}</text>");
+            }
+
+            sb.AppendLine("</svg>");
+            return sb.ToString();
+        }
+    }
+}
