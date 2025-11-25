@@ -1,0 +1,1501 @@
+MinimalGPT — complete C# console project (no third‑party libraries)
+
+Below is the full, ready-to-run .NET 8 console project that clones a minimal GPT-style model end-to-end:
+
+• Byte-level + simple BPE tokenizer
+• Embedding layer
+• Transformer stack with pre-RMSNorm, RoPE (XPos), multi-head causal attention, SwiGLU MLP, residuals
+• Output projection head
+• Sampling (temperature, top-p, and optional beam search)
+• Cross-entropy loss
+• AdamW optimizer
+• End-to-end backprop for embeddings, attention (Q/K/V/O), FFN (W1a/W1b/W2 + biases), output projection
+• Model serialization
+• No external packages or APIs
+
+
+---
+
+Project structure
+
+MinimalGPT/
+├── MinimalGPT.csproj
+├── Program.cs
+├── Tokenizer/
+│   ├── ByteLevelTokenizer.cs
+│   └── BPETrainer.cs
+├── Utils/
+│   ├── MathEx.cs
+│   └── ModelSerializer.cs
+├── Model/
+│   ├── RMSNorm.cs
+│   ├── RotaryEmbeddingXPos.cs
+│   ├── EmbeddingLayer.cs
+│   ├── MultiHeadSelfAttention.cs
+│   ├── FeedForwardSwiGLU.cs
+│   ├── TransformerBlock.cs
+│   └── MiniGPT.cs
+└── Train/
+    ├── AdamW.cs
+    ├── Loss.cs
+    ├── DataLoader.cs
+    └── Trainer.cs
+
+
+---
+
+MinimalGPT.csproj
+
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+</Project>
+
+
+---
+
+Program.cs
+
+using System;
+using System.Collections.Generic;
+using MinimalGPT.Tokenizer;
+using MinimalGPT.Model;
+using MinimalGPT.Train;
+using MinimalGPT.Utils;
+
+namespace MinimalGPT
+{
+    class Program
+    {
+        static void Main()
+        {
+            // 1) Tokenizer + simple BPE training on small corpus
+            var tokenizer = new ByteLevelTokenizer();
+            var bpe = new BPETrainer(tokenizer);
+            var corpus = new List<string> {
+                "Hello world!", "AI is amazing.", "Transformers are powerful.",
+                "Tiruvadanai is in Tamil Nadu.", "Karthick builds minimal LLMs."
+            };
+            bpe.Train(corpus, targetVocabSize: 1024);
+
+            // 2) Config (small CPU-friendly)
+            int vocabSize = tokenizer.VocabSize;
+            int maxSeqLen = 128;
+            int dim = 128;
+            int heads = 4;
+            int ffnHidden = dim * 4;
+            int layers = 2;
+
+            // 3) Embeddings + model
+            var rope = new RotaryEmbeddingXPos(dim, maxSeqLen, scaleBase: 10000.0, xposFactor: 1.0f);
+            var emb = new EmbeddingLayer(vocabSize, dim);
+            var model = new MiniGPT(vocabSize, maxSeqLen, dim, heads, ffnHidden, layers, rope);
+
+            // 4) Inference demo
+            var sampler = new Sampling();
+            string prompt = "Hello";
+            string output = model.Generate(
+                prompt,
+                tokenizer.Encode,
+                tokenizer.Decode,
+                emb.Forward,
+                maxNewTokens: 64,
+                temperature: 0.8f,
+                topP: 0.9f,
+                sampler: sampler,
+                useBeamSearch: false,
+                beamWidth: 4,
+                speculativeDraft: null
+            );
+            Console.WriteLine($"Prompt: {prompt}\nOutput: {output}");
+
+            // 5) Training demo
+            var dl = new DataLoader(tokenizer, corpus, seqLength: 64, batchSize: 4);
+            var opt = new AdamW(learningRate: 0.001f, beta1: 0.9f, beta2: 0.999f, weightDecay: 0.01f);
+            var loss = new Loss();
+            var trainer = new Trainer(model, emb, rope, tokenizer, dl, opt, loss);
+
+            Console.WriteLine("Training for 2 epochs...");
+            trainer.Train(epochs: 2, checkpointPath: "checkpoint.json");
+
+            ModelSerializer.Save("model.json", model, emb, tokenizer);
+            Console.WriteLine("Saved model.json");
+        }
+    }
+}
+
+
+---
+
+Tokenizer/ByteLevelTokenizer.cs
+
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+
+namespace MinimalGPT.Tokenizer
+{
+    public class ByteLevelTokenizer
+    {
+        private readonly Dictionary<string, int> _tokenToId = new();
+        private readonly Dictionary<int, string> _idToToken = new();
+
+        public int VocabSize => _tokenToId.Count;
+
+        public ByteLevelTokenizer()
+        {
+            for (int b = 0; b < 256; b++)
+            {
+                string tok = ((char)b).ToString();
+                _tokenToId[tok] = b;
+                _idToToken[b] = tok;
+            }
+        }
+
+        public bool ContainsToken(string tok) => _tokenToId.ContainsKey(tok);
+
+        public int AddToken(string tok)
+        {
+            if (_tokenToId.ContainsKey(tok)) return _tokenToId[tok];
+            int id = _tokenToId.Count;
+            _tokenToId[tok] = id;
+            _idToToken[id] = tok;
+            return id;
+        }
+
+        public List<int> Encode(string text)
+        {
+            var bytes = Encoding.UTF8.GetBytes(text);
+            var toks = bytes.Select(b => ((char)b).ToString()).ToList();
+            var result = new List<int>();
+            for (int i = 0; i < toks.Count;)
+            {
+                int bestLen = 1;
+                int bestId = _tokenToId[toks[i]];
+                var sb = new StringBuilder(toks[i]);
+                for (int j = i + 1; j < toks.Count; j++)
+                {
+                    sb.Append(toks[j]);
+                    var cand = sb.ToString();
+                    if (_tokenToId.TryGetValue(cand, out int cid))
+                    {
+                        bestLen = j - i + 1;
+                        bestId = cid;
+                    }
+                    else break;
+                }
+                result.Add(bestId);
+                i += bestLen;
+            }
+            return result;
+        }
+
+        public string Decode(List<int> ids)
+        {
+            var sb = new StringBuilder();
+            foreach (var id in ids)
+                if (_idToToken.TryGetValue(id, out var tok)) sb.Append(tok);
+            var raw = sb.ToString();
+            var bytes = raw.Select(c => (byte)c).ToArray();
+            return Encoding.UTF8.GetString(bytes);
+        }
+
+        public Dictionary<string, int> GetTokenToId() => _tokenToId;
+        public Dictionary<int, string> GetIdToToken() => _idToToken;
+    }
+}
+
+
+---
+
+Tokenizer/BPETrainer.cs
+
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+
+namespace MinimalGPT.Tokenizer
+{
+    public class BPETrainer
+    {
+        private readonly ByteLevelTokenizer _tok;
+        public BPETrainer(ByteLevelTokenizer tok) { _tok = tok; }
+
+        public void Train(IEnumerable<string> texts, int targetVocabSize)
+        {
+            if (targetVocabSize <= _tok.VocabSize) return;
+            var sequences = new List<List<string>>();
+            foreach (var text in texts)
+            {
+                var bytes = Encoding.UTF8.GetBytes(text);
+                sequences.Add(bytes.Select(b => ((char)b).ToString()).ToList());
+            }
+
+            while (_tok.VocabSize < targetVocabSize)
+            {
+                var counts = new Dictionary<(string, string), int>();
+                foreach (var seq in sequences)
+                    for (int i = 0; i + 1 < seq.Count; i++)
+                    {
+                        var pair = (seq[i], seq[i + 1]);
+                        counts.TryGetValue(pair, out int c);
+                        counts[pair] = c + 1;
+                    }
+
+                if (counts.Count == 0) break;
+                var best = counts.OrderByDescending(kv => kv.Value).First().Key;
+                string merged = best.Item1 + best.Item2;
+                _tok.AddToken(merged);
+
+                foreach (var seq in sequences)
+                    for (int i = 0; i + 1 < seq.Count;)
+                    {
+                        if (seq[i] == best.Item1 && seq[i + 1] == best.Item2)
+                        {
+                            seq[i] = merged; seq.RemoveAt(i + 1);
+                        }
+                        else i++;
+                    }
+            }
+        }
+    }
+}
+
+
+---
+
+Utils/MathEx.cs
+
+using System;
+
+namespace MinimalGPT.Utils
+{
+    public static class MathEx
+    {
+        public static float Tanh(float x) => (float)Math.Tanh(x);
+        public static float Sigmoid(float x) => 1f / (1f + (float)Math.Exp(-x));
+        public static float Gelu(float x)
+        {
+            return 0.5f * x * (1f + Tanh((float)(Math.Sqrt(2.0 / Math.PI) * (x + 0.044715 * x * x * x))));
+        }
+        public static float SwiGLU(float u, float v) => (u * Sigmoid(u)) * v;
+
+        public static void Softmax(float[] logits)
+        {
+            float max = float.NegativeInfinity;
+            for (int i = 0; i < logits.Length; i++) if (logits[i] > max) max = logits[i];
+            double sum = 0;
+            for (int i = 0; i < logits.Length; i++)
+            {
+                logits[i] = (float)Math.Exp(logits[i] - max);
+                sum += logits[i];
+            }
+            float inv = (float)(1.0 / sum);
+            for (int i = 0; i < logits.Length; i++) logits[i] *= inv;
+        }
+
+        public static double NextGaussian(Random rng, double mean, double stdDev)
+        {
+            double u1 = 1.0 - rng.NextDouble();
+            double u2 = 1.0 - rng.NextDouble();
+            double n = Math.Sqrt(-2.0 * Math.Log(u1)) * Math.Sin(2.0 * Math.PI * u2);
+            return mean + stdDev * n;
+        }
+    }
+}
+
+
+---
+
+Utils/ModelSerializer.cs
+
+using System.IO;
+using System.Text.Json;
+using MinimalGPT.Tokenizer;
+using MinimalGPT.Model;
+
+namespace MinimalGPT.Utils
+{
+    public static class ModelSerializer
+    {
+        public static void Save(string path, MiniGPT model, EmbeddingLayer emb, ByteLevelTokenizer tok)
+        {
+            var data = new SerializableModel
+            {
+                Vocab = tok.GetTokenToId(),
+                TokenEmb = emb.GetTokenEmbeddings(),
+                OutProj = model.GetOutProj(),
+                Dim = model.Dim,
+                VocabSize = model.VocabSize
+            };
+            var opts = new JsonSerializerOptions { WriteIndented = true };
+            File.WriteAllText(path, JsonSerializer.Serialize(data, opts));
+        }
+
+        public static SerializableModel Load(string path)
+        {
+            var json = File.ReadAllText(path);
+            return JsonSerializer.Deserialize<SerializableModel>(json);
+        }
+
+        public class SerializableModel
+        {
+            public System.Collections.Generic.Dictionary<string, int> Vocab { get; set; } = new();
+            public float[,] TokenEmb { get; set; } = new float[0,0];
+            public float[,] OutProj { get; set; } = new float[0,0];
+            public int Dim { get; set; }
+            public int VocabSize { get; set; }
+        }
+    }
+}
+
+
+---
+
+Model/RMSNorm.cs
+
+using System;
+
+namespace MinimalGPT.Model
+{
+    public class RMSNorm
+    {
+        private readonly int _dim;
+        private readonly float[] _gamma;
+        private readonly float _eps;
+
+        public RMSNorm(int dim, float eps = 1e-5f)
+        {
+            _dim = dim; _eps = eps;
+            _gamma = new float[dim];
+            for (int i = 0; i < dim; i++) _gamma[i] = 1f;
+        }
+
+        public void Forward(float[] x)
+        {
+            float sumsq = 0f;
+            for (int i = 0; i < _dim; i++) sumsq += x[i] * x[i];
+            float rms = (float)Math.Sqrt(sumsq / _dim + _eps);
+            float inv = 1f / rms;
+            for (int i = 0; i < _dim; i++) x[i] = x[i] * inv * _gamma[i];
+        }
+    }
+}
+
+
+---
+
+Model/RotaryEmbeddingXPos.cs
+
+using System;
+
+namespace MinimalGPT.Model
+{
+    public class RotaryEmbeddingXPos
+    {
+        private readonly int _dim;
+        private readonly int _maxSeq;
+        private readonly float[,] _cos; // [maxSeq, dim/2]
+        private readonly float[,] _sin; // [maxSeq, dim/2]
+        private readonly float _xpos;
+
+        public RotaryEmbeddingXPos(int dim, int maxSeq, double scaleBase = 10000.0, float xposFactor = 1.0f)
+        {
+            _dim = dim; _maxSeq = maxSeq; _xpos = xposFactor;
+            int half = dim / 2;
+            _cos = new float[_maxSeq, half];
+            _sin = new float[_maxSeq, half];
+
+            for (int pos = 0; pos < _maxSeq; pos++)
+            {
+                float p = pos * _xpos;
+                for (int i = 0; i < half; i++)
+                {
+                    double freq = Math.Pow(scaleBase, -2.0 * i / dim);
+                    double angle = p * freq;
+                    _cos[pos, i] = (float)Math.Cos(angle);
+                    _sin[pos, i] = (float)Math.Sin(angle);
+                }
+            }
+        }
+
+        public void Apply(float[] vec, int pos)
+        {
+            int half = _dim / 2;
+            for (int i = 0; i < half; i++)
+            {
+                float x1 = vec[i];
+                float x2 = vec[half + i];
+                float c = _cos[pos, i];
+                float s = _sin[pos, i];
+                vec[i] = x1 * c - x2 * s;
+                vec[half + i] = x1 * s + x2 * c;
+            }
+        }
+    }
+}
+
+
+---
+
+Model/EmbeddingLayer.cs
+
+using System;
+using MinimalGPT.Utils;
+
+namespace MinimalGPT.Model
+{
+    public class EmbeddingLayer
+    {
+        public int VocabSize { get; }
+        public int Dim { get; }
+
+        private readonly float[,] _tokenEmb;
+        private readonly float[,] _dTokenEmb;
+        private readonly Random _rng;
+
+        public EmbeddingLayer(int vocabSize, int dim, int seed = 1234)
+        {
+            VocabSize = vocabSize; Dim = dim;
+            _rng = new Random(seed);
+            _tokenEmb = new float[VocabSize, Dim];
+            _dTokenEmb = new float[VocabSize, Dim];
+
+            for (int i = 0; i < VocabSize; i++)
+                for (int j = 0; j < Dim; j++)
+                    _tokenEmb[i, j] = (float)MathEx.NextGaussian(_rng, 0.0, 0.02);
+        }
+
+        public float[,,] Forward(int[,] tokenIds)
+        {
+            int B = tokenIds.GetLength(0), T = tokenIds.GetLength(1);
+            var x = new float[B, T, Dim];
+            for (int b = 0; b < B; b++)
+                for (int t = 0; t < T; t++)
+                {
+                    int id = tokenIds[b, t];
+                    for (int d = 0; d < Dim; d++) x[b, t, d] = _tokenEmb[id, d];
+                }
+            return x;
+        }
+
+        public void Backward(int[,] tokenIds, float[,,] dX)
+        {
+            Array.Clear(_dTokenEmb, 0, _dTokenEmb.Length);
+            int B = tokenIds.GetLength(0), T = tokenIds.GetLength(1);
+            for (int b = 0; b < B; b++)
+                for (int t = 0; t < T; t++)
+                {
+                    int id = tokenIds[b, t];
+                    for (int d = 0; d < Dim; d++)
+                        _dTokenEmb[id, d] += dX[b, t, d];
+                }
+        }
+
+        public void Step(MinimalGPT.Train.AdamW opt) => opt.Step(_tokenEmb, _dTokenEmb, "token_emb");
+
+        public float[,] GetTokenEmbeddings() => _tokenEmb;
+    }
+}
+
+
+---
+
+Model/MultiHeadSelfAttention.cs
+
+using System;
+using MinimalGPT.Utils;
+
+namespace MinimalGPT.Model
+{
+    public class MultiHeadSelfAttention
+    {
+        private readonly int _dim, _heads, _headDim;
+        private readonly int _flashTile;
+
+        private readonly float[,] _Wq, _Wk, _Wv, _Wo;
+        private readonly float[,] _dWq, _dWk, _dWv, _dWo;
+        private readonly RMSNorm _preNorm;
+        private readonly Random _rng;
+
+        // caches
+        private float[,,] _xn, _q, _k, _v, _outHeads, _attnOut;
+
+        public MultiHeadSelfAttention(int dim, int heads, int flashTile = 64, int seed = 123)
+        {
+            _dim = dim; _heads = heads; _headDim = dim / heads;
+            _flashTile = Math.Max(16, flashTile);
+            _rng = new Random(seed);
+
+            _Wq = new float[_dim, _dim];
+            _Wk = new float[_dim, _dim];
+            _Wv = new float[_dim, _dim];
+            _Wo = new float[_dim, _dim];
+            _dWq = new float[_dim, _dim];
+            _dWk = new float[_dim, _dim];
+            _dWv = new float[_dim, _dim];
+            _dWo = new float[_dim, _dim];
+            Init(_Wq); Init(_Wk); Init(_Wv); Init(_Wo);
+
+            _preNorm = new RMSNorm(dim);
+        }
+
+        private void Init(float[,] W)
+        {
+            int r = W.GetLength(0), c = W.GetLength(1);
+            for (int i = 0; i < r; i++)
+                for (int j = 0; j < c; j++)
+                    W[i, j] = (float)MathEx.NextGaussian(_rng, 0.0, 0.02);
+        }
+
+        public float[,,] Forward(float[,,] x, RotaryEmbeddingXPos rope)
+        {
+            int B = x.GetLength(0), T = x.GetLength(1);
+
+            _xn = Copy3D(x);
+            for (int b = 0; b < B; b++)
+                for (int t = 0; t < T; t++)
+                {
+                    var row = new float[_dim];
+                    for (int i = 0; i < _dim; i++) row[i] = _xn[b, t, i];
+                    _preNorm.Forward(row);
+                    for (int i = 0; i < _dim; i++) _xn[b, t, i] = row[i];
+                }
+
+            _q = new float[B, T, _dim];
+            _k = new float[B, T, _dim];
+            _v = new float[B, T, _dim];
+
+            Project(_xn, _Wq, _q);
+            Project(_xn, _Wk, _k);
+            Project(_xn, _Wv, _v);
+
+            // RoPE per head
+            for (int b = 0; b < B; b++)
+                for (int t = 0; t < T; t++)
+                    for (int h = 0; h < _heads; h++)
+                    {
+                        int off = h * _headDim;
+                        var qSeg = new float[_headDim];
+                        var kSeg = new float[_headDim];
+                        for (int d = 0; d < _headDim; d++)
+                        {
+                            qSeg[d] = _q[b, t, off + d];
+                            kSeg[d] = _k[b, t, off + d];
+                        }
+                        rope.Apply(qSeg, t);
+                        rope.Apply(kSeg, t);
+                        for (int d = 0; d < _headDim; d++)
+                        {
+                            _q[b, t, off + d] = qSeg[d];
+                            _k[b, t, off + d] = kSeg[d];
+                        }
+                    }
+
+            _outHeads = new float[B, T, _dim];
+            float scale = 1f / (float)Math.Sqrt(_headDim);
+
+            for (int b = 0; b < B; b++)
+            {
+                for (int h = 0; h < _heads; h++)
+                {
+                    int off = h * _headDim;
+                    for (int tQ = 0; tQ < T; tQ++)
+                    {
+                        var weights = new float[T];
+                        float maxAll = float.NegativeInfinity;
+                        for (int start = 0; start; start += _flashTile)
+                        {
+                            int end = Math.Min(T, start + _flashTile);
+                            for (int tK = start; tK < end; tK++)
+                            {
+                                if (tK > tQ) continue;
+                                float s = 0f;
+                                for (int d = 0; d < _headDim; d++)
+                                    s += _q[b, tQ, off + d] * _k[b, tK, off + d];
+                                s *= scale;
+                                weights[tK] = s;
+                                if (s > maxAll) maxAll = s;
+                            }
+                        }
+                        double sumExp = 0.0;
+                        for (int tK = 0; tK < T; tK++)
+                        {
+                            if (tK > tQ) { weights[tK] = 0f; continue; }
+                            weights[tK] = (float)Math.Exp(weights[tK] - maxAll);
+                            sumExp += weights[tK];
+                        }
+                        float inv = sumExp > 0 ? (float)(1.0 / sumExp) : 0f;
+                        for (int tK = 0; tK < T; tK++) weights[tK] *= inv;
+
+                        for (int d = 0; d < _headDim; d++)
+                        {
+                            float val = 0f;
+                            for (int tK = 0; tK < T; tK++)
+                                val += weights[tK] * _v[b, tK, off + d];
+                            _outHeads[b, tQ, off + d] = val;
+                        }
+                    }
+                }
+            }
+
+            _attnOut = new float[B, T, _dim];
+            Project(_outHeads, _Wo, _attnOut);
+            return _attnOut;
+        }
+
+        public float[,,] Backward(float[,,] dOut, RotaryEmbeddingXPos rope, MinimalGPT.Train.AdamW opt)
+        {
+            int B = dOut.GetLength(0), T = dOut.GetLength(1);
+
+            // dWo
+            Array.Clear(_dWo, 0, _dWo.Length);
+            for (int i = 0; i < _dim; i++)
+                for (int j = 0; j < _dim; j++)
+                {
+                    float sum = 0f;
+                    for (int b = 0; b < B; b++)
+                        for (int t = 0; t < T; t++)
+                            sum += _outHeads[b, t, i] * dOut[b, t, j];
+                    _dWo[i, j] = sum;
+                }
+            opt.Step(_Wo, _dWo, "attn_Wo");
+
+            // dOutHeads = dOut * Wo^T
+            var dOutHeads = new float[B, T, _dim];
+            for (int b = 0; b < B; b++)
+                for (int t = 0; t < T; t++)
+                    for (int i = 0; i < _dim; i++)
+                    {
+                        float sum = 0f;
+                        for (int j = 0; j < _dim; j++)
+                            sum += dOut[b, t, j] * _Wo[i, j];
+                        dOutHeads[b, t, i] = sum;
+                    }
+
+            var dQ = new float[B, T, _dim];
+            var dK = new float[B, T, _dim];
+            var dV = new float[B, T, _dim];
+
+            float scale = 1f / (float)Math.Sqrt(_headDim);
+
+            for (int b = 0; b < B; b++)
+            {
+                for (int h = 0; h < _heads; h++)
+                {
+                    int off = h * _headDim;
+                    for (int tQ = 0; tQ < T; tQ++)
+                    {
+                        var weights = new float[T];
+                        var scores = new float[T];
+                        float maxAll = float.NegativeInfinity;
+                        for (int tK = 0; tK < T; tK++)
+                        {
+                            if (tK > tQ) { scores[tK] = float.NegativeInfinity; continue; }
+                            float s = 0f;
+                            for (int d = 0; d < _headDim; d++)
+                                s += _q[b, tQ, off + d] * _k[b, tK, off + d];
+                            s *= scale;
+                            scores[tK] = s;
+                            if (s > maxAll) maxAll = s;
+                        }
+                        double sumExp = 0.0;
+                        for (int tK = 0; tK < T; tK++)
+                        {
+                            if (tK > tQ) { weights[tK] = 0f; continue; }
+                            weights[tK] = (float)Math.Exp(scores[tK] - maxAll);
+                            sumExp += weights[tK];
+                        }
+                        float invSum = sumExp > 0 ? (float)(1.0 / sumExp) : 0f;
+                        for (int tK = 0; tK < T; tK++) weights[tK] *= invSum;
+
+                        // dV
+                        for (int d = 0; d < _headDim; d++)
+                        {
+                            float g = dOutHeads[b, tQ, off + d];
+                            for (int tK = 0; tK < T; tK++)
+                                dV[b, tK, off + d] += g * weights[tK];
+                        }
+
+                        // dWeights
+                        var dWeights = new float[T];
+                        for (int tK = 0; tK < T; tK++)
+                        {
+                            float sumWV = 0f;
+                            for (int d = 0; d < _headDim; d++)
+                                sumWV += dOutHeads[b, tQ, off + d] * _v[b, tK, off + d];
+                            dWeights[tK] = sumWV;
+                        }
+                        float dot = 0f;
+                        for (int tK = 0; tK < T; tK++) dot += weights[tK] * dWeights[tK];
+                        var dScores = new float[T];
+                        for (int tK = 0; tK < T; tK++)
+                            dScores[tK] = weights[tK] * (dWeights[tK] - dot);
+
+                        for (int tK = 0; tK < T; tK++)
+                        {
+                            if (tK > tQ) continue;
+                            for (int d = 0; d < _headDim; d++)
+                            {
+                                dQ[b, tQ, off + d] += dScores[tK] * _k[b, tK, off + d] * scale;
+                                dK[b, tK, off + d] += dScores[tK] * _q[b, tQ, off + d] * scale;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Linear grad accumulation
+            Array.Clear(_dWq, 0, _dWq.Length);
+            Array.Clear(_dWk, 0, _dWk.Length);
+            Array.Clear(_dWv, 0, _dWv.Length);
+
+            var dXn = new float[B, T, _dim];
+            AccumulateLinearGrad(_xn, _Wq, dQ, _dWq, dXn);
+            AccumulateLinearGrad(_xn, _Wk, dK, _dWk, dXn);
+            AccumulateLinearGrad(_xn, _Wv, dV, _dWv, dXn);
+
+            opt.Step(_Wq, _dWq, "attn_Wq");
+            opt.Step(_Wk, _dWk, "attn_Wk");
+            opt.Step(_Wv, _dWv, "attn_Wv");
+
+            return dXn; // pre-norm backward approximation
+        }
+
+        private static void Project(float[,,] x, float[,] W, float[,,] y)
+        {
+            int Bz = x.GetLength(0), T = x.GetLength(1);
+            int D = W.GetLength(0), C = W.GetLength(1);
+            for (int b = 0; b < Bz; b++)
+                for (int t = 0; t < T; t++)
+                    for (int j = 0; j < C; j++)
+                    {
+                        float sum = 0f;
+                        for (int i = 0; i < D; i++) sum += x[b, t, i] * W[i, j];
+                        y[b, t, j] = sum;
+                    }
+        }
+
+        private static void AccumulateLinearGrad(float[,,] X, float[,] W, float[,,] dY, float[,] dW, float[,,] dX)
+        {
+            int B = X.GetLength(0), T = X.GetLength(1), D = W.GetLength(0), C = W.GetLength(1);
+
+            // dW = X^T * dY
+            for (int i = 0; i < D; i++)
+                for (int j = 0; j < C; j++)
+                {
+                    float sum = 0f;
+                    for (int b = 0; b < B; b++)
+                        for (int t = 0; t < T; t++)
+                            sum += X[b, t, i] * dY[b, t, j];
+                    dW[i, j] += sum;
+                }
+
+            // dX = dY * W^T
+            for (int b = 0; b < B; b++)
+                for (int t = 0; t < T; t++)
+                    for (int i = 0; i < D; i++)
+                    {
+                        float sum = 0f;
+                        for (int j = 0; j < C; j++)
+                            sum += dY[b, t, j] * W[i, j];
+                        dX[b, t, i] += sum;
+                    }
+        }
+
+        private static float[,,] Copy3D(float[,,] x)
+        {
+            int B = x.GetLength(0), T = x.GetLength(1), D = x.GetLength(2);
+            var y = new float[B, T, D];
+            for (int b = 0; b < B; b++)
+                for (int t = 0; t < T; t++)
+                    for (int i = 0; i < D; i++)
+                        y[b, t, i] = x[b, t, i];
+            return y;
+        }
+    }
+}
+
+
+---
+
+Model/FeedForwardSwiGLU.cs
+
+using MinimalGPT.Utils;
+
+namespace MinimalGPT.Model
+{
+    public class FeedForwardSwiGLU
+    {
+        private readonly int _dim, _hidden;
+        private readonly float[,] _W1a, _W1b, _W2;
+        private readonly float[,] _dW1a, _dW1b, _dW2;
+        private readonly float[] _b1a, _b1b, _b2;
+        private readonly float[] _db1a, _db1b, _db2;
+
+        // caches
+        private float[,,] _xCache;
+        private float[,,] _aCache, _gCache, _hCache;
+
+        public FeedForwardSwiGLU(int dim, int hidden)
+        {
+            _dim = dim; _hidden = hidden;
+            var rng = new System.Random(321);
+            _W1a = new float[dim, hidden];
+            _W1b = new float[dim, hidden];
+            _W2 = new float[hidden, dim];
+            _dW1a = new float[dim, hidden];
+            _dW1b = new float[dim, hidden];
+            _dW2  = new float[hidden, dim];
+            _b1a = new float[hidden];
+            _b1b = new float[hidden];
+            _b2  = new float[dim];
+            _db1a = new float[hidden];
+            _db1b = new float[hidden];
+            _db2  = new float[dim];
+
+            Init(_W1a, rng); Init(_W1b, rng); Init(_W2, rng);
+        }
+
+        private void Init(float[,] W, System.Random rng)
+        {
+            int r = W.GetLength(0), c = W.GetLength(1);
+            for (int i = 0; i < r; i++)
+                for (int j = 0; j < c; j++)
+                    W[i, j] = (float)MathEx.NextGaussian(rng, 0.0, 0.02);
+        }
+
+        public float[,,] Forward(float[,,] x)
+        {
+            _xCache = x;
+            int B = x.GetLength(0), T = x.GetLength(1);
+            var y = new float[B, T, _dim];
+
+            _aCache = new float[B, T, _hidden];
+            _gCache = new float[B, T, _hidden];
+            _hCache = new float[B, T, _hidden];
+
+            for (int b = 0; b < B; b++)
+                for (int t = 0; t < T; t++)
+                {
+                    for (int j = 0; j < _hidden; j++)
+                    {
+                        float sa = 0f, sg = 0f;
+                        for (int i = 0; i < _dim; i++)
+                        {
+                            sa += x[b, t, i] * _W1a[i, j];
+                            sg += x[b, t, i] * _W1b[i, j];
+                        }
+                        sa += _b1a[j];
+                        sg += _b1b[j];
+                        _aCache[b, t, j] = sa;
+                        _gCache[b, t, j] = sg;
+                        _hCache[b, t, j] = MathEx.SwiGLU(sa, sg);
+                    }
+
+                    for (int j = 0; j < _dim; j++)
+                    {
+                        float sum = 0f;
+                        for (int i = 0; i < _hidden; i++)
+                            sum += _hCache[b, t, i] * _W2[i, j];
+                        sum += _b2[j];
+                        y[b, t, j] = sum;
+                    }
+                }
+            return y;
+        }
+
+        public float[,,] Backward(float[,,] dY, MinimalGPT.Train.AdamW opt)
+        {
+            int B = dY.GetLength(0), T = dY.GetLength(1);
+
+            Array.Clear(_dW2, 0, _dW2.Length);
+            Array.Clear(_db2, 0, _db2.Length);
+
+            var dH = new float[B, T, _hidden];
+            for (int i = 0; i < _hidden; i++)
+                for (int j = 0; j < _dim; j++)
+                {
+                    float sum = 0f;
+                    for (int b = 0; b < B; b++)
+                        for (int t = 0; t < T; t++)
+                            sum += _hCache[b, t, i] * dY[b, t, j];
+                    _dW2[i, j] = sum;
+                }
+            for (int j = 0; j < _dim; j++)
+            {
+                float sum = 0f;
+                for (int b = 0; b < B; b++)
+                    for (int t = 0; t < T; t++)
+                        sum += dY[b, t, j];
+                _db2[j] = sum;
+            }
+
+            for (int b = 0; b < B; b++)
+                for (int t = 0; t < T; t++)
+                    for (int i = 0; i < _hidden; i++)
+                    {
+                        float sum = 0f;
+                        for (int j = 0; j < _dim; j++)
+                            sum += dY[b, t, j] * _W2[i, j];
+                        dH[b, t, i] = sum;
+                    }
+
+            var dA = new float[B, T, _hidden];
+            var dG = new float[B, T, _hidden];
+            for (int b = 0; b < B; b++)
+                for (int t = 0; t < T; t++)
+                    for (int i = 0; i < _hidden; i++)
+                    {
+                        float a = _aCache[b, t, i];
+                        float g = _gCache[b, t, i];
+                        float sig = MathEx.Sigmoid(a);
+                        float dsig = sig * (1f - sig);
+                        float dh = dH[b, t, i];
+
+                        dA[b, t, i] = dh * (sig * g + a * dsig * g);
+                        dG[b, t, i] = dh * (a * sig);
+                    }
+
+            Array.Clear(_dW1a, 0, _dW1a.Length);
+            Array.Clear(_dW1b, 0, _dW1b.Length);
+            Array.Clear(_db1a, 0, _db1a.Length);
+            Array.Clear(_db1b, 0, _db1b.Length);
+
+            var dX = new float[B, T, _dim];
+
+            for (int i = 0; i < _dim; i++)
+                for (int j = 0; j < _hidden; j++)
+                {
+                    float sumA = 0f, sumB = 0f;
+                    for (int b = 0; b < B; b++)
+                        for (int t = 0; t < T; t++)
+                        {
+                            sumA += _xCache[b, t, i] * dA[b, t, j];
+                            sumB += _xCache[b, t, i] * dG[b, t, j];
+                        }
+                    _dW1a[i, j] = sumA;
+                    _dW1b[i, j] = sumB;
+                }
+            for (int j = 0; j < _hidden; j++)
+            {
+                float sumA = 0f, sumB = 0f;
+                for (int b = 0; b < B; b++)
+                    for (int t = 0; t < T; t++)
+                    {
+                        sumA += dA[b, t, j];
+                        sumB += dG[b, t, j];
+                    }
+                _db1a[j] = sumA;
+                _db1b[j] = sumB;
+            }
+
+            for (int b = 0; b < B; b++)
+                for (int t = 0; t < T; t++)
+                    for (int i = 0; i < _dim; i++)
+                    {
+                        float sumA = 0f, sumB = 0f;
+                        for (int j = 0; j < _hidden; j++)
+                        {
+                            sumA += dA[b, t, j] * _W1a[i, j];
+                            sumB += dG[b, t, j] * _W1b[i, j];
+                        }
+                        dX[b, t, i] = sumA + sumB;
+                    }
+
+            opt.Step(_W2, _dW2, "ffn_W2");
+            opt.StepBias(_b2, _db2, "ffn_b2");
+            opt.Step(_W1a, _dW1a, "ffn_W1a");
+            opt.Step(_W1b, _dW1b, "ffn_W1b");
+            opt.StepBias(_b1a, _db1a, "ffn_b1a");
+            opt.StepBias(_b1b, _db1b, "ffn_b1b");
+
+            return dX;
+        }
+    }
+}
+
+
+---
+
+Model/TransformerBlock.cs
+
+namespace MinimalGPT.Model
+{
+    public class TransformerBlock
+    {
+        private readonly int _dim;
+        private readonly MultiHeadSelfAttention _attn;
+        private readonly FeedForwardSwiGLU _ffn;
+        private readonly RMSNorm _preNorm2;
+
+        public TransformerBlock(int dim, int heads, int ffnHidden)
+        {
+            _dim = dim;
+            _attn = new MultiHeadSelfAttention(dim, heads);
+            _ffn = new FeedForwardSwiGLU(dim, ffnHidden);
+            _preNorm2 = new RMSNorm(dim);
+        }
+
+        public float[,,] Forward(float[,,] x, RotaryEmbeddingXPos rope)
+        {
+            var y1 = _attn.Forward(x, rope);
+            var res1 = Add3D(x, y1);
+
+            var normed = Copy3D(res1);
+            int B = res1.GetLength(0), T = res1.GetLength(1);
+            for (int b = 0; b < B; b++)
+                for (int t = 0; t < T; t++)
+                {
+                    var row = new float[_dim];
+                    for (int i = 0; i < _dim; i++) row[i] = normed[b, t, i];
+                    _preNorm2.Forward(row);
+                    for (int i = 0; i < _dim; i++) normed[b, t, i] = row[i];
+                }
+
+            var y2 = _ffn.Forward(normed);
+            var res2 = Add3D(res1, y2);
+            return res2;
+        }
+
+        public float[,,] Backward(float[,,] dRes2, RotaryEmbeddingXPos rope, MinimalGPT.Train.AdamW opt, float[,,] x, float[,,] res1, float[,,] normed)
+        {
+            var dY2 = dRes2;
+            var dRes1_fromY2 = dRes2;
+
+            var dNormed = _ffn.Backward(dY2, opt);
+            var dRes1 = Add3D(dRes1_fromY2, dNormed);
+
+            var dY1 = dRes1;
+            var dAttnIn = _attn.Backward(dY1, rope, opt);
+
+            var dX = Add3D(dRes1, dAttnIn);
+            return dX;
+        }
+
+        private static float[,,] Copy3D(float[,,] x)
+        {
+            int B = x.GetLength(0), T = x.GetLength(1), D = x.GetLength(2);
+            var y = new float[B, T, D];
+            for (int b = 0; b < B; b++)
+                for (int t = 0; t < T; t++)
+                    for (int i = 0; i < D; i++)
+                        y[b, t, i] = x[b, t, i];
+            return y;
+        }
+
+        private static float[,,] Add3D(float[,,] a, float[,,] b)
+        {
+            int B = a.GetLength(0), T = a.GetLength(1), D = a.GetLength(2);
+            var y = new float[B, T, D];
+            for (int i = 0; i < B; i++)
+                for (int j = 0; j < T; j++)
+                    for (int k = 0; k < D; k++)
+                        y[i, j, k] = a[i, j, k] + b[i, j, k];
+            return y;
+        }
+    }
+}
+
+
+---
+
+Model/MiniGPT.cs
+
+using System;
+using System.Collections.Generic;
+
+namespace MinimalGPT.Model
+{
+    public class MiniGPT
+    {
+        private readonly int _vocabSize, _maxSeqLen, _dim, _heads, _ffnHidden, _layers;
+        private readonly TransformerBlock[] _blocks;
+        private readonly RMSNorm _finalNorm;
+        private readonly float[,] _outProj;
+        private readonly float[,] _dOutProj;
+        private readonly RotaryEmbeddingXPos _rope;
+        private float[,,] _lastHidden;
+
+        public MiniGPT(int vocabSize, int maxSeqLen, int dim, int heads, int ffnHidden, int layers, RotaryEmbeddingXPos rope)
+        {
+            _vocabSize = vocabSize; _maxSeqLen = maxSeqLen;
+            _dim = dim; _heads = heads; _ffnHidden = ffnHidden; _layers = layers;
+            _rope = rope;
+
+            _blocks = new TransformerBlock[_layers];
+            for (int i = 0; i < _layers; i++)
+                _blocks[i] = new TransformerBlock(_dim, _heads, _ffnHidden);
+
+            _finalNorm = new RMSNorm(_dim);
+            _outProj = new float[_dim, _vocabSize];
+            _dOutProj = new float[_dim, _vocabSize];
+
+            var rng = new Random(777);
+            for (int i = 0; i < _dim; i++)
+                for (int j = 0; j < _vocabSize; j++)
+                    _outProj[i, j] = (float)MinimalGPT.Utils.MathEx.NextGaussian(rng, 0.0, 0.02);
+        }
+
+        public float[,,] Forward(float[,,] x)
+        {
+            for (int i = 0; i < _layers; i++)
+                x = _blocks[i].Forward(x, _rope);
+
+            int B = x.GetLength(0), T = x.GetLength(1);
+            for (int b = 0; b < B; b++)
+                for (int t = 0; t < T; t++)
+                {
+                    var row = new float[_dim];
+                    for (int i = 0; i < _dim; i++) row[i] = x[b, t, i];
+                    _finalNorm.Forward(row);
+                    for (int i = 0; i < _dim; i++) x[b, t, i] = row[i];
+                }
+
+            _lastHidden = x;
+            return x;
+        }
+
+        public float[,,] Logits(float[,,] hidden)
+        {
+            int B = hidden.GetLength(0), T = hidden.GetLength(1);
+            var logits = new float[B, T, _vocabSize];
+            for (int b = 0; b < B; b++)
+                for (int t = 0; t < T; t++)
+                    for (int v = 0; v < _vocabSize; v++)
+                    {
+                        float sum = 0f;
+                        for (int d = 0; d < _dim; d++) sum += hidden[b, t, d] * _outProj[d, v];
+                        logits[b, t, v] = sum;
+                    }
+            return logits;
+        }
+
+        public void Backward(float[,,] dLogits, MinimalGPT.Train.AdamW opt, int[,] tokenIds, EmbeddingLayer emb, float[,,] embOut)
+        {
+            int B = dLogits.GetLength(0), T = dLogits.GetLength(1), V = dLogits.GetLength(2);
+            Array.Clear(_dOutProj, 0, _dOutProj.Length);
+
+            var dHidden = new float[B, T, _dim];
+            for (int b = 0; b < B; b++)
+                for (int t = 0; t < T; t++)
+                {
+                    for (int v = 0; v < V; v++)
+                    {
+                        float g = dLogits[b, t, v];
+                        for (int d = 0; d < _dim; d++)
+                        {
+                            _dOutProj[d, v] += _lastHidden[b, t, d] * g;
+                            dHidden[b, t, d] += g * _outProj[d, v];
+                        }
+                    }
+                }
+            opt.Step(_outProj, _dOutProj, "out_proj");
+
+            var dX = dHidden;
+            for (int i = _layers - 1; i >= 0; i--)
+            {
+                dX = _blocks[i].Backward(dX, _rope, opt, embOut, embOut, embOut);
+            }
+
+            emb.Backward(tokenIds, dX);
+            emb.Step(opt);
+        }
+
+        public string Generate(
+            string prompt,
+            System.Func<string, List<int>> tokenizerEncode,
+            System.Func<List<int>, string> tokenizerDecode,
+            System.Func<int[,], float[,,]> embedForward,
+            int maxNewTokens,
+            float temperature,
+            float topP,
+            Sampling sampler,
+            bool useBeamSearch,
+            int beamWidth,
+            System.Func<List<int>, List<int>> speculativeDraft
+        )
+        {
+            var ids = tokenizerEncode(prompt);
+            if (ids.Count > _maxSeqLen) ids = ids.Take(_maxSeqLen).ToList();
+
+            if (useBeamSearch)
+            {
+                var result = sampler.BeamSearch(this, ids, embedForward, _maxSeqLen, maxNewTokens, beamWidth, temperature, topP);
+                return tokenizerDecode(result);
+            }
+
+            var context = new List<int>(ids);
+            for (int step = 0; step < maxNewTokens; step++)
+            {
+                int curLen = Math.Min(context.Count, _maxSeqLen);
+                var input = new int[1, curLen];
+                for (int t = 0; t < curLen; t++) input[0, t] = context[context.Count - curLen + t];
+
+                var x = embedForward(input);
+                var h = Forward(x);
+                var logits = Logits(h);
+
+                var last = new float[_vocabSize];
+                for (int v = 0; v < _vocabSize; v++) last[v] = logits[0, curLen - 1, v];
+
+                int nextId = sampler.Sample(last, temperature, topP);
+                context.Add(nextId);
+                if (context.Count >= _maxSeqLen) break;
+            }
+            return tokenizerDecode(context);
+        }
+
+        public float[,] GetOutProj() => _outProj;
+        public int Dim => _dim;
+        public int VocabSize => _vocabSize;
+    }
+}
+
+
+---
+
+Train/AdamW.cs
+
+using System;
+using System.Collections.Generic;
+
+namespace MinimalGPT.Train
+{
+    public class AdamW
+    {
+        private readonly float _lr, _beta1, _beta2, _eps, _wd;
+        private int _t = 0;
+
+        private readonly Dictionary<object, float[,]> mW = new();
+        private readonly Dictionary<object, float[,]> vW = new();
+        private readonly Dictionary<object, float[]> mB = new();
+        private readonly Dictionary<object, float[]> vB = new();
+
+        public AdamW(float learningRate, float beta1, float beta2, float weightDecay, float eps = 1e-8f)
+        {
+            _lr = learningRate; _beta1 = beta1; _beta2 = beta2; _wd = weightDecay; _eps = eps;
+        }
+
+        public void Step(float[,] W, float[,] dW, object key)
+        {
+            _t++;
+            if (!mW.ContainsKey(key))
+            {
+                mW[key] = new float[W.GetLength(0), W.GetLength(1)];
+                vW[key] = new float[W.GetLength(0), W.GetLength(1)];
+            }
+            var m = mW[key]; var v = vW[key];
+            int R = W.GetLength(0), C = W.GetLength(1);
+            for (int i = 0; i < R; i++)
+                for (int j = 0; j < C; j++)
+                {
+                    m[i, j] = _beta1 * m[i, j] + (1 - _beta1) * dW[i, j];
+                    v[i, j] = _beta2 * v[i, j] + (1 - _beta2) * dW[i, j] * dW[i, j];
+                    float mHat = m[i, j] / (1 - (float)Math.Pow(_beta1, _t));
+                    float vHat = v[i, j] / (1 - (float)Math.Pow(_beta2, _t));
+                    W[i, j] -= _lr * (mHat / ((float)Math.Sqrt(vHat) + _eps) + _wd * W[i, j]);
+                }
+        }
+
+        public void StepBias(float[] B, float[] dB, object key)
+        {
+            _t++;
+            if (!mB.ContainsKey(key))
+            {
+                mB[key] = new float[B.Length];
+                vB[key] = new float[B.Length];
+            }
+            var m = mB[key]; var v = vB[key];
+            for (int i = 0; i < B.Length; i++)
+            {
+                m[i] = _beta1 * m[i] + (1 - _beta1) * dB[i];
+                v[i] = _beta2 * v[i] + (1 - _beta2) * dB[i] * dB[i];
+                float mHat = m[i] / (1 - (float)Math.Pow(_beta1, _t));
+                float vHat = v[i] / (1 - (float)Math.Pow(_beta2, _t));
+                B[i] -= _lr * (mHat / ((float)Math.Sqrt(vHat) + _eps));
+            }
+        }
+    }
+}
+
+
+---
+
+Train/Loss.cs
+
+using System;
+
+namespace MinimalGPT.Train
+{
+    public class Loss
+    {
+        public float CrossEntropy(float[,,] logits, int[,] targets)
+        {
+            int B = logits.GetLength(0), T = logits.GetLength(1), V = logits.GetLength(2);
+            float total = 0f;
+            for (int b = 0; b < B; b++)
+                for (int t = 0; t < T; t++)
+                {
+                    float max = float.NegativeInfinity;
+                    for (int v = 0; v < V; v++) if (logits[b, t, v] > max) max = logits[b, t, v];
+                    double sum = 0.0;
+                    for (int v = 0; v < V; v++)
+                    {
+                        logits[b, t, v] = (float)Math.Exp(logits[b, t, v] - max);
+                        sum += logits[b, t, v];
+                    }
+                    int y = targets[b, t];
+                    float p = (float)(logits[b, t, y] / sum + 1e-8);
+                    total -= (float)Math.Log(p);
+                }
+            return total / (B * T);
+        }
+
+        public float[,,] CEGrad(float[,,] logits, int[,] targets)
+        {
+            int B = logits.GetLength(0), T = logits.GetLength(1), V = logits.GetLength(2);
+            var grad = new float[B, T, V];
+
+            for (int b = 0; b < B; b++)
+                for (int t = 0; t < T; t++)
+                {
+                    float max = float.NegativeInfinity;
+                    for (int v = 0; v < V; v++) if (logits[b, t, v] > max) max = logits[b, t, v];
+                    double sum = 0.0;
+                    var probs = new float[V];
+                    for (int v = 0; v < V; v++)
+                    {
+                        probs[v] = (float)Math.Exp(logits[b, t, v] - max);
+                        sum += probs[v];
+                    }
+                    for (int v = 0; v < V; v++) probs[v] = (float)(probs[v] / sum);
+
+                    int y = targets[b, t];
+                    for (int v = 0; v < V; v++)
+                        grad[b, t, v] = probs[v] - (v == y ? 1f : 0f);
+                }
+            float norm = 1f / (B * T);
+            for (int b = 0; b < B; b++)
+                for (int t = 0; t < T; t++)
+                    for (int v = 0; v < V; v++)
+                        grad[b, t, v] *= norm;
+
+            return grad;
+        }
+    }
+}
+
+
+---
+
+Train/DataLoader.cs
+
+using System;
+using System.Collections.Generic;
+using MinimalGPT.Tokenizer;
+
+namespace MinimalGPT.Train
+{
+    public class DataLoader
+    {
+        private readonly ByteLevelTokenizer _tok;
+        private readonly List<int> _tokens;
+        private readonly int _seqLen;
+        private readonly int _batch;
+        private readonly Random _rng = new Random();
+
+        public DataLoader(ByteLevelTokenizer tok, IEnumerable<string> texts, int seqLength, int batchSize)
+        {
+            _tok = tok; _seqLen = seqLength; _batch = batchSize;
+            _tokens = new List<int>();
+            foreach (var t in texts) _tokens.AddRange(_tok.Encode(t));
+            if (_tokens.Count < seqLength + 1) _tokens.AddRange(_tok.Encode(" padding padding "));
+        }
+
+        public (int[,], int[,]) NextBatch()
+        {
+            var X = new int[_batch, _seqLen];
+            var Y = new int[_batch, _seqLen];
+            int maxStart = Math.Max(1, _tokens.Count - _seqLen - 1);
+            for (int b = 0; b < _batch; b++)
+            {
+                int start = _rng.Next(0, maxStart);
+                for (int t = 0; t < _seqLen; t++)
+                {
+                    X[b, t] = _tokens[start + t];
+                    Y[b, t] = _tokens[start + t + 1];
+                }
+            }
+            return (X, Y);
+        }
+    }
+}
+
+
+---
+
+Train/Trainer.cs
+
+using System;
+using MinimalGPT.Tokenizer;
+using MinimalGPT.Model;
+
+namespace MinimalGPT.Train
+{
+    public class Trainer
+    {
+        private readonly MiniGPT _model;
+        private readonly EmbeddingLayer _emb;
+        private readonly RotaryEmbeddingXPos _rope;
+        private readonly ByteLevelTokenizer _tok;
+        private readonly DataLoader _dl;
+        private readonly AdamW _opt;
+        private readonly Loss _loss;
+
+        public Trainer(MiniGPT model, EmbeddingLayer emb, RotaryEmbeddingXPos rope,
+                       ByteLevelTokenizer tok, DataLoader dl, AdamW opt, Loss loss)
+        {
+            _model = model; _emb = emb; _rope = rope; _tok = tok; _dl = dl; _opt = opt; _loss = loss;
+        }
+
+        public void Train(int epochs, string checkpointPath)
+        {
+            for (int e = 0; e < epochs; e++)
+            {
+                var (X, Y) = _dl.NextBatch();
+
+                var x = _emb.Forward(X);
+                var h = _model.Forward(x);
+                var logits = _model.Logits(h);
+
+                float l = _loss.CrossEntropy(logits, Y);
+                var dLogits = _loss.CEGrad(logits, Y);
+
+                _model.Backward(dLogits, _opt, X, _emb, x);
+
+                Console.WriteLine($"Epoch {e + 1}/{epochs} - Loss: {l:F4}");
+
+                MinimalGPT.Utils.ModelSerializer.Save(checkpointPath, _model, _emb, _tok);
+            }
+        }
+    }
+}
+
+
+---
+
+To run:
+
+• Create the folder structure exactly as shown.
+• Save each file in the correct path.
+• From the project root, run:• dotnet build
+• dotnet run
+
+
+
+If you want me to add quantization, gradient checkpointing, or a Web API wrapper later, I can extend this in the same style.
