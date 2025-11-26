@@ -1,0 +1,1832 @@
+using chatbotAPI.Layers.MyEmbedding;
+using chatbotAPI.Layers.MyTransformer;
+using chatbotAPI.Layers.MyTransformer.Training;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using System.ComponentModel;
+using System.Net;
+using System.Reflection;
+
+namespace chatbotAPI.Controllers
+{
+    [Route("api/[controller]")]
+    [ApiController]
+    public class ChatbotController : ControllerBase
+    {
+        private readonly ITokeniserLayers _tokeniserLayers;
+
+        public ChatbotController(ITokeniserLayers tokeniserService)
+        {
+            _tokeniserLayers = tokeniserService ?? throw new Exception("Not null");
+        }
+
+        [HttpPost("train")]
+        public IActionResult TrainData()
+        {
+            try
+            {
+                var result = _tokeniserLayers.TrainTokeniser();
+                return Ok(result);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { Error = ex.Message });
+            }
+        }
+
+
+        [HttpPost("mlp-last-block")]
+        public IActionResult TrainMlpLastBlock([FromBody] TrainReq req)
+        {
+            if (req == null || req.Epochs <= 0)
+                return BadRequest(new { Error = "Provide positive epochs." });
+
+            // 1) Load corpus and tokenize
+            var path = Path.Combine("wwwroot", "data", "input", "sampleinput.txt");
+            if (!System.IO.File.Exists(path))
+                return BadRequest(new { Error = "Corpus not found." });
+
+            var text = System.IO.File.ReadAllText(path);
+
+            // IMPORTANT: keep </w> and (optionally) add BOS/EOS inside your Encode implementation
+            var ids = _tokeniserLayers.Encode(text);
+
+            // 2) Build sequences (simple sliding windows)
+            int ctx = req.Context <= 0 ? 64 : req.Context;
+            var sequences = new List<int[]>();
+            for (int start = 0; start + ctx < ids.Count; start += ctx)
+                sequences.Add(ids.Skip(start).Take(ctx).ToArray());
+
+            if (sequences.Count == 0)
+                return BadRequest(new { Error = "Not enough tokens for chosen context." });
+
+            // 3) Model + embeddings
+            int vocabSize = _tokeniserLayers.GetVocabSize();
+            var emb = new EmbeddingLayer(vocabSize, req.DModel);
+            var pos = new PositionalEncodingLayer(ctx, req.DModel);
+            var model = new TransformerModel(req.DModel, req.NumHeads, req.NumLayers, vocabSize);
+            var trainer = new MLPTrainer(model, lr: req.LR);
+
+            // 4) Train epochs
+            float lastLoss = 0f;
+            for (int epoch = 1; epoch <= req.Epochs; epoch++)
+            {
+                float sumLoss = 0f; int count = 0;
+                foreach (var seq in sequences)
+                {
+                    if (seq.Length < 2) continue;
+                    var xIds = seq.Take(seq.Length - 1).ToArray();
+                    var yIds = seq.Skip(1).ToArray();
+
+                    var xEmb = EmbeddingComposer.ComposeWithSinusoidal(emb, pos, xIds, scaleBySqrtDModel: true);
+                    var loss = trainer.TrainStep(xEmb, yIds);
+
+                    sumLoss += loss; count++;
+                }
+                lastLoss = sumLoss / Math.Max(count, 1);
+                Console.WriteLine($"[MLP] Epoch {epoch}/{req.Epochs} - loss: {lastLoss:F4}");
+            }
+
+            return Ok(new { Message = "Training finished (last-block MLP + output projection).", Loss = lastLoss });
+        }
+
+
+
+        [HttpPost("output-proj")]
+        public IActionResult TrainOutputProjection([FromBody] TrainReq req)
+        {
+            if (req == null || req.Epochs <= 0)
+                return BadRequest(new { Error = "Provide positive epochs." });
+
+            // 1) Tokenize corpus; ensure tokenizer is trained/loaded
+            var inputPath = Path.Combine("wwwroot", "data", "input", "sampleinput.txt");
+            if (!System.IO.File.Exists(inputPath))
+                return BadRequest(new { Error = "Corpus not found." });
+
+            var text = System.IO.File.ReadAllText(inputPath);
+            var ids = _tokeniserLayers.Encode(text); // keep </w>; optionally add <bos>/<eos> in your Encode implementation
+
+            // 2) Build sequences (simple sliding window)
+            int ctx = req.Context <= 0 ? 64 : req.Context;
+            var sequences = new List<int[]>();
+            for (int start = 0; start + ctx < ids.Count; start += ctx)
+                sequences.Add(ids.Skip(start).Take(ctx).ToArray());
+
+            if (sequences.Count == 0)
+                return BadRequest(new { Error = "Not enough tokens in corpus for chosen context." });
+
+            // 3) Model + embeddings
+            int vocabSize = _tokeniserLayers.GetVocabSize();
+            var emb = new EmbeddingLayer(vocabSize, req.DModel);
+            var pos = new PositionalEncodingLayer(ctx, req.DModel);
+            var model = new TransformerModel(req.DModel, req.NumHeads, req.NumLayers, vocabSize);
+            var trainer = new OutputLayerTrainer(model, lr: req.LR);
+
+            // 4) Training loop (epochs over sequences)
+            float lastLoss = 0f;
+            for (int epoch = 1; epoch <= req.Epochs; epoch++)
+            {
+                float sumLoss = 0f; int count = 0;
+                foreach (var seq in sequences)
+                {
+                    // teacher forcing: inputs x[0..T-2], targets y[1..T-1]
+                    if (seq.Length < 2) continue;
+                    var xIds = seq.Take(seq.Length - 1).ToArray();
+                    var yIds = seq.Skip(1).ToArray();
+
+                    var xEmb = EmbeddingComposer.ComposeWithSinusoidal(emb, pos, xIds, scaleBySqrtDModel: true);
+                    var loss = trainer.TrainStep(xEmb, yIds);
+
+                    sumLoss += loss; count++;
+                }
+                lastLoss = sumLoss / Math.Max(count, 1);
+                Console.WriteLine($"Epoch {epoch}/{req.Epochs} - loss: {lastLoss:F4}");
+            }
+
+            return Ok(new { Message = "Training finished (output projection only).", Loss = lastLoss });
+        }
+
+
+        [HttpPost("chatbot")]
+        public IActionResult ChartBotInterface([FromBody] GenRequest req)
+        {
+            // 1) Tokenize 
+            var tokenIds = _tokeniserLayers.Encode(req.Text).Where(x => x != 4).ToList();
+            var decoded = _tokeniserLayers.Decode(tokenIds);
+
+            // 2) Embeddings
+            int vocabSize = _tokeniserLayers.GetVocabSize();
+            var tokEmb = new EmbeddingLayer(vocabSize, req.DModel);
+            var posEmb = new PositionalEncodingLayer(req.MaxLen, req.DModel);
+            var xEmb = EmbeddingComposer.ComposeWithSinusoidal(tokEmb, posEmb, tokenIds.ToArray(), scaleBySqrtDModel: true);
+            // Your EmbeddingLayer.Forward returns [seqLen, dModel], matching your earlier output "Embeddings shape: [4, 64]"  [2](https://persistentsystems-my.sharepoint.com/personal/karthick_g_persistent_com/Documents/Microsoft%20Copilot%20Chat%20Files/EmbeddingLayer.cs)
+
+            // 3) Transformer forward
+            var model = new TransformerModel(req.DModel, req.NumHeads, req.NumLayers, vocabSize);
+            var logits = model.Forward(xEmb); // [T, vocab]
+
+            // 4) Next-token generation loop (small, untrained model -> nonsense text, but pipeline works)
+            var generated = new List<int>(tokenIds);
+
+            for (int step = 0; step < req.MaxNewTokens; step++)
+            {
+                // recompute embeddings for current sequence (simple but slow; OK for demo)
+                var x = EmbeddingComposer.ComposeWithSinusoidal(tokEmb, posEmb, generated.ToArray(), scaleBySqrtDModel: true);
+                var lgs = model.Forward(x);
+
+                // take last position logits
+                int T = lgs.GetLength(0);
+                int V = lgs.GetLength(1);
+                var last = new float[V];
+                for (int j = 0; j < V; j++) last[j] = lgs[T - 1, j];
+
+                int nextId = req.Sampling switch
+                {
+                    "greedy" => Sampler.Greedy(last),
+                    "topk" => Sampler.TopKSample(last, req.TopK, req.Temperature),
+                    "topp" => Sampler.TopPSample(last, req.TopP, req.Temperature),
+                    _ => Sampler.Greedy(last)
+                };
+
+                generated.Add(nextId);
+
+                // stop if you decide to use <eos> (id=3 in your current special tokens order)
+                if (nextId == 3) break; // <eos>  [1](https://persistentsystems-my.sharepoint.com/personal/karthick_g_persistent_com/Documents/Microsoft%20Copilot%20Chat%20Files/TokeniserLayers.cs)
+                if (generated.Count >= req.MaxLen) break;
+            }
+
+            var decodeds = _tokeniserLayers.Decode(generated);
+            return Ok(new
+            {
+                Input = req.Text,
+                TokenIds = generated,
+                Output = decodeds
+            });
+
+        }
+
+
+        public class GenRequest
+        {            
+            public string Text { get; set; } = string.Empty;
+            [DefaultValue(64)]
+            public int DModel { get; set; } = 64;
+            [DefaultValue(8)]
+            public int NumHeads { get; set; } = 8;
+            [DefaultValue(4)]
+            public int NumLayers { get; set; } = 4;
+            [DefaultValue(128)]
+            public int MaxLen { get; set; } = 128;
+            [DefaultValue(20)]
+            public int MaxNewTokens { get; set; } = 20;
+            [DefaultValue("greedy")]
+            public string Sampling { get; set; } = "greedy"; // "greedy", "topk", "topp"
+            [DefaultValue(50)]
+            public int TopK { get; set; } = 50;
+            [DefaultValue(0.95f)]
+            public float TopP { get; set; } = 0.95f;
+            [DefaultValue(1.0f)]
+            public float Temperature { get; set; } = 1.0f;
+        }
+
+
+        public class TrainReq
+        {
+            public int DModel { get; set; } = 64;
+            public int NumHeads { get; set; } = 4;
+            public int NumLayers { get; set; } = 2;
+            public int Context { get; set; } = 64;
+            public int Epochs { get; set; } = 3;
+            public float LR { get; set; } = 1e-3f;
+        }
+
+
+    }
+}
+
+using System.Text;
+
+namespace chatbotAPI.Layers.MyEmbedding
+{
+    public class EmbeddingLayer
+    {
+        public int VocabSize { get; }
+        public int DModel { get; }
+        private float[,] _weights; // [VocabSize, DModel]
+        private static readonly Random _rng = new Random(42);
+
+        public EmbeddingLayer(int vocabSize, int dModel, bool init = true)
+        {
+            VocabSize = vocabSize;
+            DModel = dModel;
+            _weights = init ? XavierUniform(vocabSize, dModel) : new float[vocabSize, dModel];
+        }
+
+        /// <summary>
+        /// Forward: returns [seqLen, dModel] for given token IDs.
+        /// </summary>
+        public float[,] Forward(int[] tokenIds)
+        {
+            int seqLen = tokenIds.Length;
+            var output = new float[seqLen, DModel];
+
+            for (int i = 0; i < seqLen; i++)
+            {
+                int id = tokenIds[i];
+                if (id < 0 || id >= VocabSize)
+                    throw new ArgumentOutOfRangeException(nameof(tokenIds), $"Token id {id} out of range [0,{VocabSize}).");
+
+                for (int d = 0; d < DModel; d++)
+                    output[i, d] = _weights[id, d];
+            }
+            return output;
+        }
+
+        public void Save(string path) => SaveMatrix(path, _weights);
+        public void Load(string path) => _weights = LoadMatrix(path);
+
+        public float[,] Weights => _weights;
+
+
+        private static float[,] XavierUniform(int rows, int cols)
+        {
+            var w = new float[rows, cols];
+            float limit = (float)Math.Sqrt(6.0 / (rows + cols));
+            for (int r = 0; r < rows; r++)
+                for (int c = 0; c < cols; c++)
+                    w[r, c] = RandUniform(-limit, limit);
+            return w;
+        }
+
+        private static float RandUniform(float a, float b)
+            => a + (float)_rng.NextDouble() * (b - a);
+
+        // Binary save/load for matrices
+        private static void SaveMatrix(string path, float[,] mat)
+        {
+            using var fs = new FileStream(path, FileMode.Create, FileAccess.Write);
+            using var bw = new BinaryWriter(fs, Encoding.UTF8, leaveOpen: false);
+            int rows = mat.GetLength(0);
+            int cols = mat.GetLength(1);
+            bw.Write(rows);
+            bw.Write(cols);
+            for (int r = 0; r < rows; r++)
+                for (int c = 0; c < cols; c++)
+                    bw.Write(mat[r, c]);
+        }
+
+        private static float[,] LoadMatrix(string path)
+        {
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read);
+            using var br = new BinaryReader(fs, Encoding.UTF8, leaveOpen: false);
+            int rows = br.ReadInt32();
+            int cols = br.ReadInt32();
+            var mat = new float[rows, cols];
+            for (int r = 0; r < rows; r++)
+                for (int c = 0; c < cols; c++)
+                    mat[r, c] = br.ReadSingle();
+            return mat;
+        }
+    }
+
+    public class PositionalEncodingLayer
+    {
+        public int MaxLen { get; }
+        public int DModel { get; }
+        private readonly float[,] _pe; // [MaxLen, DModel]
+
+        public PositionalEncodingLayer(int maxLen, int dModel)
+        {
+            MaxLen = maxLen;
+            DModel = dModel;
+            _pe = Build(maxLen, dModel);
+        }
+
+        private static float[,] Build(int maxLen, int dModel)
+        {
+            var pe = new float[maxLen, dModel];
+            for (int pos = 0; pos < maxLen; pos++)
+            {
+                for (int i = 0; i < dModel; i++)
+                {
+                    // classic alternating sin/cos with increasing wavelengths
+                    double divTerm = Math.Pow(10000.0, (2.0 * Math.Floor(i / 2.0)) / dModel);
+                    if (i % 2 == 0)
+                        pe[pos, i] = (float)Math.Sin(pos / divTerm);
+                    else
+                        pe[pos, i] = (float)Math.Cos(pos / divTerm);
+                }
+            }
+            return pe;
+        }
+
+        /// <summary>
+        /// Adds positional encodings to x [seqLen, dModel] in-place.
+        /// </summary>
+        public void AddInPlace(float[,] x)
+        {
+            int seqLen = x.GetLength(0);
+            int dModel = x.GetLength(1);
+            if (dModel != DModel) throw new ArgumentException("DModel mismatch.");
+            if (seqLen > MaxLen) throw new ArgumentException("Sequence length exceeds MaxLen.");
+
+            for (int i = 0; i < seqLen; i++)
+                for (int d = 0; d < dModel; d++)
+                    x[i, d] += _pe[i, d];
+        }
+
+        public float[,] GetPE() => _pe;
+    }
+
+    /// <summary>
+    /// Sums token embeddings + positional embeddings with optional sqrt(dModel) scaling.
+    /// </summary>
+    public static class EmbeddingComposer
+    {
+        public static float[,] ComposeWithSinusoidal(EmbeddingLayer tok, PositionalEncodingLayer pos, int[] tokenIds, bool scaleBySqrtDModel = true)
+        {
+            var x = tok.Forward(tokenIds);   // [seqLen, dModel]
+
+            if (scaleBySqrtDModel)
+            {
+                int seqLen = x.GetLength(0);
+                int d = x.GetLength(1);
+                float scale = (float)Math.Sqrt(d);
+                for (int i = 0; i < seqLen; i++)
+                    for (int j = 0; j < d; j++)
+                        x[i, j] *= scale;
+            }
+
+            pos.AddInPlace(x);
+            return x;
+        }
+
+        public static float[,] ComposeWithLearned(EmbeddingLayer tok, PositionalEncodingLayer pos, int[] tokenIds, bool scaleBySqrtDModel = true)
+        {
+            var x = tok.Forward(tokenIds);
+
+            if (scaleBySqrtDModel)
+            {
+                int seqLen = x.GetLength(0);
+                int d = x.GetLength(1);
+                float scale = (float)Math.Sqrt(d);
+                for (int i = 0; i < seqLen; i++)
+                    for (int j = 0; j < d; j++)
+                        x[i, j] *= scale;
+            }
+
+            pos.AddInPlace(x);
+            return x;
+        }
+
+    }
+}
+using System.Collections.Concurrent;
+using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+
+namespace chatbotAPI.Layers.MyEmbedding
+{
+    public interface ITokeniserLayers
+    {
+        Dictionary<string, int> TrainTokeniser();
+        List<int> Encode(string text);
+        int GetVocabSize();
+        (Dictionary<string, int> Vocab, Dictionary<int, string> IdToToken, List<(string, string)> Merges) Load();
+        string Decode(List<int> tokenIds);
+        List<string> listWords(List<int> tokenIds);
+        Dictionary<string, int> GetTokenToId();
+    }
+
+    public class TokeniserLayers : ITokeniserLayers
+    {
+        private readonly string _inputDir;
+        private readonly string _outputDir;
+        private readonly string _textFilePath;
+        private readonly int _vocabSize = 50000;
+        private readonly List<string> _specialTokens = new() { "<unk>", "<pad>", "<bos>", "<eos>", "</w>" };
+
+        private Dictionary<string, int> _vocab = new();
+        private Dictionary<int, string> _idToToken = new();
+        private List<(string, string)> _merges = new();
+        private Dictionary<(string, string), int> _ranks = new();
+        private bool _isLoaded = false;
+        private readonly object _lockObject = new object();
+
+        public TokeniserLayers(IWebHostEnvironment env)
+        {
+            _inputDir = Path.Combine(env.WebRootPath, "data", "input");
+            _outputDir = Path.Combine(env.WebRootPath, "data", "output");
+            _textFilePath = Path.Combine(_inputDir, "sampleinput.txt");
+
+            // Create directories if they don't exist
+            Directory.CreateDirectory(_inputDir);
+            Directory.CreateDirectory(_outputDir);
+        }
+
+        public Dictionary<string, int> TrainTokeniser()
+        {
+            if (!File.Exists(_textFilePath))
+                throw new FileNotFoundException($"Input file not found: {_textFilePath}");
+
+            string content = File.ReadAllText(_textFilePath);
+            string cleanedText = CleanText(content);
+
+            if (string.IsNullOrEmpty(cleanedText))
+                throw new InvalidOperationException("No valid text content after cleaning");
+
+            // Split into words and convert to character tokens
+            var tokenLists = cleanedText
+                .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                .Where(word => !string.IsNullOrEmpty(word))
+                .Select(word => word.Select(c => c.ToString()).ToList())
+                .ToList();
+
+            var corpus = tokenLists;
+            var tokenSet = new HashSet<string>();
+
+            // Initialize with character tokens
+            foreach (var word in corpus)
+            {
+                foreach (var token in word)
+                {
+                    tokenSet.Add(token);
+                }
+            }
+
+            int mergeCount = 0;
+            int maxMerges = _vocabSize - _specialTokens.Count - tokenSet.Count;
+
+            while (tokenSet.Count < _vocabSize && mergeCount < maxMerges)
+            {
+                var pairFreqs = GetPairFrequenciesParallel(corpus);
+                if (pairFreqs.Count == 0) break;
+
+                var bestPair = pairFreqs.OrderByDescending(pair => pair.Value).First().Key;
+                _merges.Add(bestPair);
+
+                // Update corpus with merged pairs
+                corpus = MergePair(bestPair, corpus);
+
+                // Update token set
+                tokenSet.Clear();
+                foreach (var word in corpus)
+                {
+                    foreach (var token in word)
+                    {
+                        tokenSet.Add(token);
+                    }
+                }
+
+                mergeCount++;
+
+                if (mergeCount % 1000 == 0)
+                {
+                    Console.WriteLine($"Completed {mergeCount} merges, vocabulary size: {tokenSet.Count}");
+                }
+            }
+
+            BuildVocabulary(tokenSet);
+            SaveTokeniserAsync().Wait();
+            _isLoaded = true;
+
+            Console.WriteLine($"Training completed. Final vocabulary size: {_vocab.Count}");
+            return _vocab;
+        }
+
+        private void BuildVocabulary(HashSet<string> tokenSet)
+        {
+            _vocab.Clear();
+            _idToToken.Clear();
+            _ranks.Clear();
+
+            // Add special tokens first
+            int id = 0;
+            foreach (var token in _specialTokens)
+            {
+                _vocab[token] = id;
+                _idToToken[id] = token;
+                id++;
+            }
+
+            // Add regular tokens
+            foreach (var token in tokenSet.OrderBy(t => t))
+            {
+                if (!_vocab.ContainsKey(token))
+                {
+                    _vocab[token] = id;
+                    _idToToken[id] = token;
+                    id++;
+                }
+            }
+
+            // Build ranks for merges
+            for (int i = 0; i < _merges.Count; i++)
+            {
+                _ranks[_merges[i]] = i;
+            }
+        }
+
+        private async Task SaveTokeniserAsync()
+        {
+            try
+            {
+                if (!Directory.Exists(_outputDir))
+                    Directory.CreateDirectory(_outputDir);
+
+                var vocabJson = JsonSerializer.Serialize(_vocab, new JsonSerializerOptions { WriteIndented = true });
+                await File.WriteAllTextAsync(Path.Combine(_outputDir, "vocab.json"), vocabJson);
+
+                var mergeLines = new List<string> { "#v1.0" };
+                mergeLines.AddRange(_merges.Select(m => $"{m.Item1} {m.Item2}"));
+                await File.WriteAllLinesAsync(Path.Combine(_outputDir, "merges.txt"), mergeLines);
+
+                Console.WriteLine("Tokeniser saved successfully");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error saving tokeniser: {ex.Message}");
+                throw;
+            }
+        }
+
+        public (Dictionary<string, int> Vocab, Dictionary<int, string> IdToToken, List<(string, string)> Merges) Load()
+        {
+            lock (_lockObject)
+            {
+                if (!_isLoaded)
+                {
+                    var vocabPath = Path.Combine(_outputDir, "vocab.json");
+                    var mergesPath = Path.Combine(_outputDir, "merges.txt");
+
+                    if (!File.Exists(vocabPath) || !File.Exists(mergesPath))
+                        throw new FileNotFoundException("Tokeniser files not found. Train the tokeniser first.");
+
+                    try
+                    {
+                        _vocab = JsonSerializer.Deserialize<Dictionary<string, int>>(
+                            File.ReadAllText(vocabPath)) ?? new Dictionary<string, int>();
+
+                        _idToToken = _vocab.ToDictionary(kv => kv.Value, kv => kv.Key);
+
+                        var lines = File.ReadAllLines(mergesPath).Skip(1); // Skip version header
+                        _merges = lines
+                            .Where(line => !string.IsNullOrWhiteSpace(line))
+                            .Select(l =>
+                            {
+                                var parts = l.Split(' ', 2);
+                                return (parts[0], parts[1]);
+                            })
+                            .ToList();
+
+                        _ranks = _merges.Select((m, i) => new { m, i })
+                                       .ToDictionary(x => x.m, x => x.i);
+
+                        _isLoaded = true;
+                        Console.WriteLine("Tokeniser loaded successfully");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Error loading tokeniser: {ex.Message}");
+                        throw;
+                    }
+                }
+                return (_vocab, _idToToken, _merges);
+            }
+        }
+
+        public List<int> Encode(string text)
+        {
+            if (!_isLoaded) Load();
+
+            var cleanedText = CleanText(text);
+            var tokenIds = new List<int>();
+            var unknownTokens = new List<string>();
+
+            foreach (var word in cleanedText.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (string.IsNullOrEmpty(word)) continue;
+
+                var tokens = word.Select(c => c.ToString()).ToList();
+                tokens.Add("</w>"); // Add word ending token
+
+                var mergedTokens = ApplyMerges(tokens);
+
+                foreach (var token in mergedTokens)
+                {
+                    if (_vocab.TryGetValue(token, out int tokenId))
+                    {
+                        tokenIds.Add(tokenId);
+                    }
+                    else
+                    {
+                        tokenIds.Add(_vocab["<unk>"]);
+                        unknownTokens.Add(token);
+                    }
+                }
+            }
+
+            if (unknownTokens.Count > 0)
+            {
+                Console.WriteLine($"Unknown tokens encountered: {string.Join(", ", unknownTokens.Distinct())}");
+            }
+
+            return tokenIds;
+        }
+
+        public string Decode(List<int> tokenIds)
+        {
+            if (!_isLoaded) Load();
+
+            var tokens = tokenIds.Select(id =>
+                _idToToken.TryGetValue(id, out string token) ? token : "<unk>"
+            ).ToList();
+
+            var result = new StringBuilder();
+            var currentWord = new StringBuilder();
+
+            foreach (var token in tokens)
+            {
+                if (token == "</w>")
+                {
+                    if (currentWord.Length > 0)
+                    {
+                        result.Append(currentWord.ToString()).Append(' ');
+                        currentWord.Clear();
+                    }
+                }
+                else
+                {
+                    currentWord.Append(token + " ");
+                }
+            }
+
+            // Add any remaining word
+            if (currentWord.Length > 0)
+            {
+                result.Append(currentWord.ToString()).Append(' ');
+            }
+
+            return result.ToString().Trim();
+        }
+
+        public List<string> listWords(List<int> tokenIds)
+        {
+            if (!_isLoaded) Load();
+
+            var tokens = tokenIds.Select(id =>
+                _idToToken.TryGetValue(id, out string token) ? token : "<unk>"
+            ).ToList();
+
+            return tokens;
+        }
+
+        public Dictionary<string, int> GetTokenToId()
+        {
+            if (!_isLoaded) Load();
+            return _vocab;
+        }
+        public Dictionary<int, string> GetIdToToken() => _idToToken;
+
+        public int GetVocabSize()
+        {
+            if (!_isLoaded) Load();
+            return _vocab.Count;
+        }
+
+        private ConcurrentDictionary<(string, string), int> GetPairFrequenciesParallel(List<List<string>> corpus)
+        {
+            var pairs = new ConcurrentDictionary<(string, string), int>();
+
+            Parallel.ForEach(corpus, word =>
+            {
+                for (int i = 0; i < word.Count - 1; i++)
+                {
+                    var pair = (word[i], word[i + 1]);
+                    pairs.AddOrUpdate(pair, 1, (_, count) => count + 1);
+                }
+            });
+
+            return pairs;
+        }
+
+        private List<List<string>> MergePair((string, string) pair, List<List<string>> corpus)
+        {
+            var result = new List<List<string>>();
+
+            foreach (var word in corpus)
+            {
+                var newWord = new List<string>();
+                int i = 0;
+
+                while (i < word.Count)
+                {
+                    if (i < word.Count - 1 && (word[i], word[i + 1]) == pair)
+                    {
+                        newWord.Add(word[i] + word[i + 1]);
+                        i += 2;
+                    }
+                    else
+                    {
+                        newWord.Add(word[i]);
+                        i++;
+                    }
+                }
+                result.Add(newWord);
+            }
+
+            return result;
+        }
+
+        private List<string> ApplyMerges(List<string> tokens)
+        {
+            if (_merges.Count == 0) return tokens;
+
+            var currentTokens = new List<string>(tokens);
+
+            while (true)
+            {
+                var pairs = new List<((string, string) pair, int rank)>();
+
+                for (int i = 0; i < currentTokens.Count - 1; i++)
+                {
+                    var pair = (currentTokens[i], currentTokens[i + 1]);
+                    if (_ranks.TryGetValue(pair, out int rank))
+                    {
+                        pairs.Add((pair, rank));
+                    }
+                }
+
+                if (pairs.Count == 0) break;
+
+                // Find the pair with the lowest rank (earliest merge)
+                var bestPair = pairs.OrderBy(p => p.rank).First().pair;
+
+                var newTokens = new List<string>();
+                int j = 0;
+
+                while (j < currentTokens.Count)
+                {
+                    if (j < currentTokens.Count - 1 &&
+                        (currentTokens[j], currentTokens[j + 1]) == bestPair)
+                    {
+                        newTokens.Add(currentTokens[j] + currentTokens[j + 1]);
+                        j += 2;
+                    }
+                    else
+                    {
+                        newTokens.Add(currentTokens[j]);
+                        j++;
+                    }
+                }
+
+                currentTokens = newTokens;
+            }
+
+            return currentTokens;
+        }
+
+        private string CleanText(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return string.Empty;
+
+            // Remove HTML tags
+            text = Regex.Replace(text, "<.*?>", string.Empty);
+
+            // Remove URLs
+            text = Regex.Replace(text, @"https?://\S+|www\.\S+", string.Empty);
+
+
+            // Remove all special characters (including punctuation)
+            text = Regex.Replace(text, @"[^a-zA-Z0-9\s]", string.Empty);
+
+
+            // Remove extra whitespace and normalize
+            text = Regex.Replace(text, @"\s+", " ").Trim();
+
+            // Convert to lowercase
+            text = text.ToLowerInvariant();
+
+            return text;
+        }
+    }
+}
+namespace chatbotAPI.Layers.MyTransformer.Training
+{
+
+    public class AdamW
+    {
+        private readonly float _lr;
+        private readonly float _beta1;
+        private readonly float _beta2;
+        private readonly float _eps;
+        private readonly float _weightDecay;
+
+        private float[,] _mW;
+        private float[,] _vW;
+        private float[] _mb;
+        private float[] _vb;
+        private int _t;
+
+        public AdamW(float lr = 1e-3f, float beta1 = 0.9f, float beta2 = 0.999f, float eps = 1e-8f, float weightDecay = 0.01f)
+        {
+            _lr = lr; _beta1 = beta1; _beta2 = beta2; _eps = eps; _weightDecay = weightDecay;
+            _t = 0;
+        }
+
+        public void Init(int inDim, int outDim)
+        {
+            _mW = new float[inDim, outDim];
+            _vW = new float[inDim, outDim];
+            _mb = new float[outDim];
+            _vb = new float[outDim];
+        }
+
+        public void Step(float[,] W, float[] b, float[,] dW, float[] db)
+        {
+            _t++;
+
+            int inDim = W.GetLength(0);
+            int outDim = W.GetLength(1);
+
+            // Weight decay
+            for (int i = 0; i < inDim; i++)
+                for (int j = 0; j < outDim; j++)
+                    dW[i, j] += _weightDecay * W[i, j];
+
+            // Moments update
+            for (int i = 0; i < inDim; i++)
+            {
+                for (int j = 0; j < outDim; j++)
+                {
+                    _mW[i, j] = _beta1 * _mW[i, j] + (1 - _beta1) * dW[i, j];
+                    _vW[i, j] = _beta2 * _vW[i, j] + (1 - _beta2) * dW[i, j] * dW[i, j];
+
+                    float mHat = _mW[i, j] / (1 - (float)Math.Pow(_beta1, _t));
+                    float vHat = _vW[i, j] / (1 - (float)Math.Pow(_beta2, _t));
+
+                    W[i, j] -= _lr * mHat / (float)(Math.Sqrt(vHat) + _eps);
+                }
+            }
+
+            for (int j = 0; j < outDim; j++)
+            {
+                _mb[j] = _beta1 * _mb[j] + (1 - _beta1) * db[j];
+                _vb[j] = _beta2 * _vb[j] + (1 - _beta2) * db[j] * db[j];
+
+                float mHat = _mb[j] / (1 - (float)Math.Pow(_beta1, _t));
+                float vHat = _vb[j] / (1 - (float)Math.Pow(_beta2, _t));
+
+                b[j] -= _lr * mHat / (float)(Math.Sqrt(vHat) + _eps);
+            }
+        }
+    }
+
+}
+namespace chatbotAPI.Layers.MyTransformer.Training
+{
+
+    public static class CrossEntropyLoss
+    {
+        // Computes loss and gradient dL/dlogits for a batch of sequences.
+        // logits: [T, V], targetIds: [T] (each entry in 0..V-1)
+        // Returns (loss, dLogits)
+        public static (float loss, float[,] dLogits) Forward(float[,] logits, int[] targetIds)
+        {
+            int T = logits.GetLength(0);
+            int V = logits.GetLength(1);
+            var dLogits = new float[T, V];
+
+            float totalLoss = 0f;
+            for (int t = 0; t < T; t++)
+            {
+                int y = targetIds[t];
+                // softmax with stability
+                float maxv = float.NegativeInfinity;
+                for (int j = 0; j < V; j++) maxv = Math.Max(maxv, logits[t, j]);
+
+                float sum = 0f;
+                for (int j = 0; j < V; j++)
+                    sum += (float)Math.Exp(logits[t, j] - maxv);
+
+                float logSum = (float)Math.Log(sum);
+                float logProbY = logits[t, y] - maxv - logSum;
+                totalLoss += -logProbY;
+
+                // gradient: softmax - one_hot(y)
+                for (int j = 0; j < V; j++)
+                {
+                    float p = (float)Math.Exp(logits[t, j] - maxv - logSum);
+                    dLogits[t, j] = p - (j == y ? 1f : 0f);
+                }
+            }
+
+            float meanLoss = totalLoss / T;
+            // Average gradient across time to keep scales reasonable
+            for (int t = 0; t < T; t++)
+                for (int j = 0; j < V; j++)
+                    dLogits[t, j] /= T;
+
+            return (meanLoss, dLogits);
+        }
+    }
+
+}
+namespace chatbotAPI.Layers.MyTransformer.Training
+{
+
+    public class MLPTrainer
+    {
+        private readonly TransformerModel _model;
+        private readonly AdamW _optOut;   // optimizer for output projection (optional)
+        private readonly AdamW _optFfn1;  // optimizer for FFN1
+        private readonly AdamW _optFfn2;  // optimizer for FFN2
+
+        public MLPTrainer(TransformerModel model, float lr = 1e-3f)
+        {
+            _model = model;
+
+            // init optimizers for trainable parts
+            var outProj = _model.GetOutputProjection();
+            _optOut = new AdamW(lr); _optOut.Init(outProj.GetWeights().GetLength(0), outProj.GetWeights().GetLength(1));
+
+            var last = _model.GetLastBlock();
+            _optFfn1 = new AdamW(lr); _optFfn1.Init(last.FFN1.GetWeights().GetLength(0), last.FFN1.GetWeights().GetLength(1));
+            _optFfn2 = new AdamW(lr); _optFfn2.Init(last.FFN2.GetWeights().GetLength(0), last.FFN2.GetWeights().GetLength(1));
+        }
+
+        // One training step on a single sequence
+        public float TrainStep(float[,] xEmb, int[] targetIds)
+        {
+            // Forward: up to last block input
+            var H_in = _model.ForwardUntilLastBlock(xEmb);
+
+            // Forward last block (caches stored inside block)
+            var last = _model.GetLastBlock();
+            var Y_last = last.Forward(H_in);           // [T, d]
+
+            // Final LN + output projection
+            var lnFinal = _model.GetFinalLayerNorm();
+            var N = lnFinal.Forward(Y_last);           // [T, d]
+            var outProj = _model.GetOutputProjection();
+            var logits = outProj.Forward(N);           // [T, V]
+
+            // Loss and dLogits
+            var (loss, dLogits) = CrossEntropyLoss.Forward(logits, targetIds);
+
+            // Backprop into output projection: logits = N * W + b
+            var (dN, dW_out, db_out) = outProj.Backward(N, dLogits);
+            _optOut.Step(outProj.GetWeights(), outProj.GetBias(), dW_out, db_out);
+
+            // Backprop through final LayerNorm to get dY_last
+            var (dY_last, dGamma, dBeta) = lnFinal.Backward(dN);
+            // Optionally update gamma/beta here with small LR; skip for Milestone B (frozen LN).
+            // If you want to update: create AdamW for gamma/beta arrays (1D). For simplicity, keep LN frozen.
+
+            // Backprop only the MLP path of the last block
+            var (dH, (dW2, db2), (dW1, db1)) = last.BackwardMLP(dY_last);
+            _optFfn2.Step(last.FFN2.GetWeights(), last.FFN2.GetBias(), dW2, db2);
+            _optFfn1.Step(last.FFN1.GetWeights(), last.FFN1.GetBias(), dW1, db1);
+
+            // We ignore dH (gradient to attention & earlier blocks) in Milestone B.
+            return loss;
+        }
+    }
+
+}
+namespace chatbotAPI.Layers.MyTransformer.Training
+{
+
+
+    public class OutputLayerTrainer
+    {
+        private readonly TransformerModel _model;
+        private readonly AdamW _opt;
+
+        // Expose references to outProj parameters to update in-place
+        private readonly Dense _outProj;
+        private float[,] _W => _outProj.GetWeights();
+        private float[] _b => _outProj.GetBias();
+
+        public OutputLayerTrainer(TransformerModel model, float lr = 1e-3f)
+        {
+            _model = model;
+            _outProj = model.GetOutputProjection();
+            _opt = new AdamW(lr);
+            _opt.Init(_W.GetLength(0), _W.GetLength(1));
+        }
+
+        // One training step on a single sequence (teacher forcing)
+        public float TrainStep(float[,] xEmb, int[] targetIds)
+        {
+            // Forward
+            var (states, logits) = _model.ForwardWithStates(xEmb); // states: [T, d], logits: [T, V]
+
+            // Loss + dLogits
+            var (loss, dLogits) = CrossEntropyLoss.Forward(logits, targetIds);
+
+            // Backprop only through final Dense: Y = states * W + b
+            int T = states.GetLength(0);
+            int D = states.GetLength(1);
+            int V = logits.GetLength(1);
+
+            var dW = new float[D, V];
+            var db = new float[V];
+
+            for (int t = 0; t < T; t++)
+            {
+                for (int v = 0; v < V; v++)
+                {
+                    db[v] += dLogits[t, v];
+                }
+                for (int d = 0; d < D; d++)
+                {
+                    float sd = states[t, d];
+                    for (int v = 0; v < V; v++)
+                        dW[d, v] += sd * dLogits[t, v];
+                }
+            }
+
+            // Optimizer step
+            _opt.Step(_W, _b, dW, db);
+            return loss;
+        }
+    }
+
+}
+namespace chatbotAPI.Layers.MyTransformer
+{
+    public static class Activations
+    {
+        // Approximate GELU (tanh version, used widely)
+        public static float[,] GELU(float[,] X)
+        {
+            int T = X.GetLength(0);
+            int D = X.GetLength(1);
+            var Y = new float[T, D];
+            for (int i = 0; i < T; i++)
+            {
+                for (int j = 0; j < D; j++)
+                {
+                    float x = X[i, j];
+                    float x3 = x * x * x;
+                    float inner = 0.79788456f * (x + 0.044715f * x3); // sqrt(2/pi) ~ 0.79788456
+                    float tanh = (float)Math.Tanh(inner);
+                    Y[i, j] = 0.5f * x * (1f + tanh);
+                }
+            }
+            return Y;
+        }
+
+
+        // Backward GELU: dY/dX for tanh approximation
+        public static float[,] GELUBackward(float[,] X, float[,] dY)
+        {
+            int T = X.GetLength(0);
+            int D = X.GetLength(1);
+            var dX = new float[T, D];
+
+            for (int i = 0; i < T; i++)
+            {
+                for (int j = 0; j < D; j++)
+                {
+                    float x = X[i, j];
+                    float x2 = x * x;
+                    float x3 = x2 * x;
+                    float inner = 0.79788456f * (x + 0.044715f * x3);
+                    float t = (float)Math.Tanh(inner);
+                    float dt_dx = (1f - t * t) * 0.79788456f * (1f + 0.134145f * x2); // 0.134145 = 3 * 0.044715
+                    float dgelu_dx = 0.5f * (1f + t) + 0.5f * x * dt_dx;
+                    dX[i, j] = dY[i, j] * dgelu_dx;
+                }
+            }
+            return dX;
+        }
+
+    }
+}
+namespace chatbotAPI.Layers.MyTransformer
+{
+    public class Dense
+    {
+        private readonly int _in;
+        private readonly int _out;
+        private readonly float[,] _W; // [in, out]
+        private readonly float[] _b;  // [out]
+        private static readonly Random _rng = new Random(1337);
+
+        public Dense(int inputDim, int outputDim)
+        {
+            _in = inputDim; _out = outputDim;
+            _W = Xavier(_in, _out);
+            _b = new float[_out];
+        }
+
+        public float[,] Forward(float[,] X) // [T, in] -> [T, out]
+        {
+            var Y = TensorOps.MatMul(X, _W); // [T, out]
+            int T = Y.GetLength(0);
+            for (int i = 0; i < T; i++)
+                for (int j = 0; j < _out; j++)
+                    Y[i, j] += _b[j];
+            return Y;
+        }
+
+        private static float[,] Xavier(int r, int c)
+        {
+            var W = new float[r, c];
+            float limit = (float)Math.Sqrt(6.0 / (r + c));
+            for (int i = 0; i < r; i++)
+                for (int j = 0; j < c; j++)
+                    W[i, j] = (float)(_rng.NextDouble() * 2 * limit - limit);
+            return W;
+        }
+
+
+        // Backward: given input X and upstream gradient dY, compute dX, dW, db
+        public (float[,] dX, float[,] dW, float[] db) Backward(float[,] X, float[,] dY)
+        {
+            int T = X.GetLength(0);
+            int IN = X.GetLength(1);
+            int OUT = dY.GetLength(1);
+            if (IN != _in || OUT != _out || dY.GetLength(0) != T)
+                throw new ArgumentException("Dense.Backward shape mismatch.");
+
+            // dW = X^T * dY
+            var XT = TensorOps.Transpose(X);
+            var dW = TensorOps.MatMul(XT, dY);
+
+            // db = sum over rows of dY
+            var db = new float[OUT];
+            for (int i = 0; i < T; i++)
+                for (int j = 0; j < OUT; j++)
+                    db[j] += dY[i, j];
+
+            // dX = dY * W^T
+            var WT = TensorOps.Transpose(_W);
+            var dX = TensorOps.MatMul(dY, WT);
+
+            return (dX, dW, db);
+        }
+
+
+        public float[,] GetWeights() => _W;
+        public float[] GetBias() => _b;
+
+    }
+
+}
+namespace chatbotAPI.Layers.MyTransformer
+{
+    public class LayerNorm
+    {
+        private readonly int _d;
+        private readonly float[] _gamma; // scale
+        private readonly float[] _beta;  // bias
+
+
+        // caches per forward
+        private float[,] _norm;  // normalized values per row
+        private float[] _invStd; // 1/sqrt(var+eps) per row
+        private const float _eps = 1e-5f;
+
+        public LayerNorm(int dModel)
+        {
+            _d = dModel;
+            _gamma = new float[_d];
+            _beta = new float[_d];
+            for (int i = 0; i < _d; i++) _gamma[i] = 1f; // init as identity
+
+        }
+
+
+        public float[,] Forward(float[,] X) // [T, d]
+        {
+            int T = X.GetLength(0);
+            int D = X.GetLength(1);
+            if (D != _d) throw new ArgumentException("LayerNorm dModel mismatch.");
+
+            _norm = new float[T, D];
+            _invStd = new float[T];
+            var Y = new float[T, D];
+
+            for (int t = 0; t < T; t++)
+            {
+                // mean
+                float mean = 0f;
+                for (int j = 0; j < D; j++) mean += X[t, j];
+                mean /= D;
+
+                // variance
+                float var = 0f;
+                for (int j = 0; j < D; j++)
+                {
+                    float v = X[t, j] - mean;
+                    var += v * v;
+                }
+                var /= D;
+                float invStd = 1f / (float)Math.Sqrt(var + _eps);
+                _invStd[t] = invStd;
+
+                for (int j = 0; j < D; j++)
+                {
+                    float n = (X[t, j] - mean) * invStd;
+                    _norm[t, j] = n;
+                    Y[t, j] = n * _gamma[j] + _beta[j];
+                }
+            }
+            return Y;
+        }
+
+
+        // Backward: given upstream dY, return dX and grads for gamma/beta
+        public (float[,] dX, float[] dGamma, float[] dBeta) Backward(float[,] dY)
+        {
+            int T = dY.GetLength(0);
+            int D = dY.GetLength(1);
+
+            var dX = new float[T, D];
+            var dGamma = new float[D];
+            var dBeta = new float[D];
+
+            // dBeta, dGamma
+            for (int t = 0; t < T; t++)
+            {
+                for (int j = 0; j < D; j++)
+                {
+                    dBeta[j] += dY[t, j];
+                    dGamma[j] += dY[t, j] * _norm[t, j];
+                }
+            }
+
+            // dX using standard LN backward formula
+            for (int t = 0; t < T; t++)
+            {
+                float invStd = _invStd[t];
+
+                // sum(dY * gamma)
+                float sum1 = 0f;
+                // sum((dY * gamma) * norm)
+                float sum2 = 0f;
+
+                for (int j = 0; j < D; j++)
+                {
+                    float dy = dY[t, j];
+                    float gy = dy * _gamma[j];
+                    sum1 += gy;
+                    sum2 += gy * _norm[t, j];
+                }
+
+                for (int j = 0; j < D; j++)
+                {
+                    float gy = dY[t, j] * _gamma[j];
+                    // dX = invStd / D * (D*gy - sum1 - norm*sum2)
+                    dX[t, j] = invStd * ((gy * D) - sum1 - _norm[t, j] * sum2) / D;
+                }
+            }
+
+            return (dX, dGamma, dBeta);
+        }
+
+        public float[] Gamma => _gamma;
+        public float[] Beta => _beta;
+
+
+    }
+
+}
+namespace chatbotAPI.Layers.MyTransformer
+{
+
+    public class MultiHeadSelfAttention
+    {
+        private readonly int _dModel;
+        private readonly int _numHeads;
+        private readonly int _headDim;
+        private readonly Dense _Wq, _Wk, _Wv, _Wo;
+
+        public MultiHeadSelfAttention(int dModel, int numHeads)
+        {
+            if (dModel % numHeads != 0) throw new ArgumentException("dModel must be divisible by numHeads.");
+            _dModel = dModel;
+            _numHeads = numHeads;
+            _headDim = dModel / numHeads;
+
+            _Wq = new Dense(_dModel, _dModel);
+            _Wk = new Dense(_dModel, _dModel);
+            _Wv = new Dense(_dModel, _dModel);
+            _Wo = new Dense(_dModel, _dModel);
+        }
+
+        public float[,] Forward(float[,] X) // X: [T, dModel]
+        {
+            var Q = _Wq.Forward(X); // [T, d]
+            var K = _Wk.Forward(X);
+            var V = _Wv.Forward(X);
+
+            // Split into heads: naive slice view
+            int T = X.GetLength(0);
+            var context = new float[T, _dModel];
+
+            for (int h = 0; h < _numHeads; h++)
+            {
+                // Slice Q_h, K_h, V_h : [T, headDim]
+                var Qh = SliceColumns(Q, h * _headDim, _headDim);
+                var Kh = SliceColumns(K, h * _headDim, _headDim);
+                var Vh = SliceColumns(V, h * _headDim, _headDim);
+
+                // Scores: [T, T] = Q_h * K_h^T
+                var KhT = TensorOps.Transpose(Kh);
+                var scores = TensorOps.MatMul(Qh, KhT);
+
+                // scale
+                float scale = 1f / (float)Math.Sqrt(_headDim);
+                ScaleInPlace(scores, scale);
+
+                // causal mask
+                TensorOps.ApplyCausalMaskInPlace(scores);
+
+                // softmax rows -> attn
+                var attn = TensorOps.SoftmaxRows(scores); // [T, T]
+
+                // context_h: [T, headDim] = attn * Vh
+                var ctx_h = TensorOps.MatMul(attn, Vh);
+
+                // write into context concat columns
+                WriteColumns(context, ctx_h, h * _headDim);
+            }
+
+            // output projection Wo
+            var Y = _Wo.Forward(context); // [T, d]
+            return Y;
+        }
+
+        private static float[,] SliceColumns(float[,] X, int startCol, int width)
+        {
+            int T = X.GetLength(0);
+            var Y = new float[T, width];
+            for (int i = 0; i < T; i++)
+                for (int j = 0; j < width; j++)
+                    Y[i, j] = X[i, startCol + j];
+            return Y;
+        }
+
+        private static void WriteColumns(float[,] dest, float[,] src, int startCol)
+        {
+            int T = dest.GetLength(0);
+            int W = src.GetLength(1);
+            for (int i = 0; i < T; i++)
+                for (int j = 0; j < W; j++)
+                    dest[i, startCol + j] = src[i, j];
+        }
+
+        private static void ScaleInPlace(float[,] X, float s)
+        {
+            int m = X.GetLength(0);
+            int n = X.GetLength(1);
+            for (int i = 0; i < m; i++)
+                for (int j = 0; j < n; j++)
+                    X[i, j] *= s;
+        }
+    }
+
+}
+namespace chatbotAPI.Layers.MyTransformer
+{
+    public static class Sampler
+    {
+        private static readonly Random _rng = new Random(7);
+
+        public static int Greedy(float[] logits) => ArgMax(logits);
+
+        public static int TopKSample(float[] logits, int k = 50, float temperature = 1.0f)
+        {
+            var probs = Softmax(logits, temperature);
+            var idxs = Enumerable.Range(0, probs.Length)
+                                 .OrderByDescending(i => probs[i])
+                                 .Take(k).ToArray();
+            var mass = idxs.Sum(i => probs[i]);
+            double r = _rng.NextDouble() * mass;
+            double cum = 0;
+            foreach (var i in idxs)
+            {
+                cum += probs[i];
+                if (cum >= r) return i;
+            }
+            return idxs.Last();
+        }
+
+        public static int TopPSample(float[] logits, float p = 0.9f, float temperature = 1.0f)
+        {
+            var probs = Softmax(logits, temperature);
+            var ordered = Enumerable.Range(0, probs.Length)
+                                    .OrderByDescending(i => probs[i])
+                                    .ToArray();
+            double cum = 0;
+            var shortlist = ordered.TakeWhile(i =>
+            {
+                if (cum >= p) return false;
+                cum += probs[i];
+                return true;
+            }).ToArray();
+
+            double mass = shortlist.Sum(i => probs[i]);
+            double r = _rng.NextDouble() * mass;
+            double acc = 0;
+            foreach (var i in shortlist)
+            {
+                acc += probs[i];
+                if (acc >= r) return i;
+            }
+            return shortlist.Last();
+        }
+
+        private static int ArgMax(float[] x)
+        {
+            int best = 0; float bestv = x[0];
+            for (int i = 1; i < x.Length; i++)
+                if (x[i] > bestv) { bestv = x[i]; best = i; }
+            return best;
+        }
+
+        private static float[] Softmax(float[] logits, float temperature)
+        {
+            int n = logits.Length;
+            var y = new float[n];
+            float invT = 1f / Math.Max(temperature, 1e-6f);
+            float maxv = logits.Max();
+            float sum = 0f;
+            for (int i = 0; i < n; i++)
+            {
+                float e = (float)Math.Exp((logits[i] - maxv) * invT);
+                y[i] = e; sum += e;
+            }
+            float invSum = 1f / Math.Max(sum, 1e-12f);
+            for (int i = 0; i < n; i++) y[i] *= invSum;
+            return y;
+        }
+    }
+
+}
+namespace chatbotAPI.Layers.MyTransformer
+{
+    public static class TensorOps
+    {
+        // Matrix multiply: A[m,n] x B[n,p] -> C[m,p]
+        public static float[,] MatMul(float[,] A, float[,] B)
+        {
+            int m = A.GetLength(0);
+            int n = A.GetLength(1);
+            int nB = B.GetLength(0);
+            int p = B.GetLength(1);
+            if (n != nB) throw new ArgumentException("MatMul dimension mismatch.");
+
+            var C = new float[m, p];
+            for (int i = 0; i < m; i++)
+            {
+                for (int k = 0; k < n; k++)
+                {
+                    float aik = A[i, k];
+                    for (int j = 0; j < p; j++)
+                        C[i, j] += aik * B[k, j];
+                }
+            }
+            return C;
+        }
+
+        public static float[,] Transpose(float[,] X)
+        {
+            int m = X.GetLength(0);
+            int n = X.GetLength(1);
+            var Y = new float[n, m];
+            for (int i = 0; i < m; i++)
+                for (int j = 0; j < n; j++)
+                    Y[j, i] = X[i, j];
+            return Y;
+        }
+
+        public static void AddInPlace(float[,] A, float[,] B)
+        {
+            int m = A.GetLength(0);
+            int n = A.GetLength(1);
+            if (m != B.GetLength(0) || n != B.GetLength(1))
+                throw new ArgumentException("AddInPlace dimension mismatch.");
+            for (int i = 0; i < m; i++)
+                for (int j = 0; j < n; j++)
+                    A[i, j] += B[i, j];
+        }
+
+        // Softmax over last dimension for each row
+        public static float[,] SoftmaxRows(float[,] X)
+        {
+            int m = X.GetLength(0);
+            int n = X.GetLength(1);
+            var Y = new float[m, n];
+            for (int i = 0; i < m; i++)
+            {
+                // max trick
+                float maxv = float.NegativeInfinity;
+                for (int j = 0; j < n; j++) maxv = Math.Max(maxv, X[i, j]);
+                float sum = 0f;
+                for (int j = 0; j < n; j++)
+                {
+                    float e = (float)Math.Exp(X[i, j] - maxv);
+                    Y[i, j] = e;
+                    sum += e;
+                }
+                float invSum = 1f / Math.Max(sum, 1e-12f);
+                for (int j = 0; j < n; j++) Y[i, j] *= invSum;
+            }
+            return Y;
+        }
+
+        // Argmax over last dimension for each row; returns indices
+        public static int[] ArgMaxRows(float[,] X)
+        {
+            int m = X.GetLength(0);
+            int n = X.GetLength(1);
+            var idx = new int[m];
+            for (int i = 0; i < m; i++)
+            {
+                int best = 0;
+                float bestv = X[i, 0];
+                for (int j = 1; j < n; j++)
+                {
+                    if (X[i, j] > bestv) { bestv = X[i, j]; best = j; }
+                }
+                idx[i] = best;
+            }
+            return idx;
+        }
+
+        public static void ApplyCausalMaskInPlace(float[,] scores)
+        {
+            int Tq = scores.GetLength(0);
+            int Tk = scores.GetLength(1);
+            // For row i (query position), columns > i should be masked
+            for (int i = 0; i < Tq; i++)
+                for (int j = 0; j < Tk; j++)
+                    if (j > i) scores[i, j] = float.NegativeInfinity;
+        }
+    }
+
+}
+namespace chatbotAPI.Layers.MyTransformer
+{
+
+    // Pre-norm GPT-style block: LN -> MHA -> Residual ; LN -> MLP -> Residual
+    public class TransformerBlock
+    {
+        private readonly int _dModel;
+        private readonly int _ffnDim;
+        private readonly LayerNorm _ln1;
+        private readonly LayerNorm _ln2;
+        private readonly MultiHeadSelfAttention _attn;
+        private readonly Dense _ffn1;
+        private readonly Dense _ffn2;
+
+
+        // Cache for last forward
+        private float[,] _X_in;   // input to block
+        private float[,] _N1;
+        private float[,] _A;
+        private float[,] _H;      // after attn residual
+        private float[,] _N2;     // LN2(H)
+        private float[,] _M1;     // ffn1(N2)
+        private float[,] _M2;     // GELU(M1)
+        private float[,] _M3;     // ffn2(M2)
+        private float[,] _Y;      // H + M3
+
+
+        public TransformerBlock(int dModel, int numHeads, int ffnMultiplier = 4)
+        {
+            _dModel = dModel;
+            _ffnDim = ffnMultiplier * dModel;
+
+            _ln1 = new LayerNorm(dModel);
+            _ln2 = new LayerNorm(dModel);
+            _attn = new MultiHeadSelfAttention(dModel, numHeads);
+            _ffn1 = new Dense(dModel, _ffnDim);
+            _ffn2 = new Dense(_ffnDim, dModel);
+        }
+
+
+        public float[,] Forward(float[,] X) // [T, d]
+        {
+            _X_in = X;
+            _N1 = _ln1.Forward(X);
+            _A = _attn.Forward(_N1);
+            _H = Add(X, _A); // residual
+
+            _N2 = _ln2.Forward(_H);
+            _M1 = _ffn1.Forward(_N2);
+            _M2 = Activations.GELU(_M1);
+            _M3 = _ffn2.Forward(_M2);
+            _Y = Add(_H, _M3); // residual
+            return _Y;
+        }
+
+        // Train only the MLP path: given upstream gradient dY on block output, update ffn2 & ffn1
+        // Returns dH (gradient going to the residual input H), which you can ignore if attention is frozen.
+        public (float[,] dH, (float[,] dW2, float[] db2), (float[,] dW1, float[] db1)) BackwardMLP(float[,] dY)
+        {
+            // Residual Y = H + M3 -> dM3 = dY ; dH accumulates dY
+            int T = dY.GetLength(0);
+            int D = dY.GetLength(1);
+            var dM3 = new float[T, D];
+            var dH = new float[T, D];
+            for (int i = 0; i < T; i++)
+                for (int j = 0; j < D; j++)
+                {
+                    dM3[i, j] = dY[i, j];
+                    dH[i, j] = dY[i, j]; // we won't propagate this further in Milestone B
+                }
+
+            // ffn2 backward: M3 = ffn2(M2)
+            var (dM2, dW2, db2) = _ffn2.Backward(_M2, dM3);
+
+            // GELU backward: M2 = GELU(M1)
+            var dM1 = Activations.GELUBackward(_M1, dM2);
+
+            // ffn1 backward: M1 = ffn1(N2)
+            var (dN2, dW1, db1) = _ffn1.Backward(_N2, dM1);
+
+            // We stop here for Milestone B (don’t propagate dN2 through LN2 into H/attention).
+            return (dH, (dW2, db2), (dW1, db1));
+        }
+
+
+        private static float[,] Add(float[,] A, float[,] B)
+        {
+            int T = A.GetLength(0);
+            int D = A.GetLength(1);
+            var C = new float[T, D];
+            for (int i = 0; i < T; i++)
+                for (int j = 0; j < D; j++)
+                    C[i, j] = A[i, j] + B[i, j];
+            return C;
+        }
+
+
+        // Expose references for trainer (optional)
+        public Dense FFN1 => _ffn1;
+        public Dense FFN2 => _ffn2;
+
+    }
+
+}
+namespace chatbotAPI.Layers.MyTransformer
+{
+    public class TransformerModel
+    {
+        private readonly int _dModel;
+        private readonly int _numHeads;
+        private readonly int _numLayers;
+        private readonly int _vocabSize;
+
+        private readonly TransformerBlock[] _blocks;
+        private readonly LayerNorm _lnFinal;
+        private readonly Dense _outProj; // dModel -> vocab
+
+        public TransformerModel(int dModel, int numHeads, int numLayers, int vocabSize)
+        {
+            _dModel = dModel;
+            _numHeads = numHeads;
+            _numLayers = numLayers;
+            _vocabSize = vocabSize;
+
+            _blocks = new TransformerBlock[_numLayers];
+            for (int i = 0; i < _numLayers; i++)
+                _blocks[i] = new TransformerBlock(_dModel, _numHeads);
+
+            _lnFinal = new LayerNorm(_dModel);
+            _outProj = new Dense(_dModel, _vocabSize);
+        }
+
+        /// <summary>
+        /// Forward pass from embeddings to logits.
+        /// xEmb: [T, dModel] -> logits: [T, vocabSize]
+        /// </summary>
+        public float[,] Forward(float[,] xEmb)
+        {
+            var H = xEmb;
+            for (int i = 0; i < _numLayers; i++)
+                H = _blocks[i].Forward(H);
+
+            var N = _lnFinal.Forward(H);
+            var logits = _outProj.Forward(N);
+            return logits;
+        }
+
+
+        public (float[,] states, float[,] logits) ForwardWithStates(float[,] xEmb)
+        {
+            var H = xEmb;
+            for (int i = 0; i < _numLayers; i++)
+                H = _blocks[i].Forward(H);
+
+            var N = _lnFinal.Forward(H);           // states before projection
+            var logits = _outProj.Forward(N);      // final logits
+            return (N, logits);
+        }
+
+
+        // Expose components for trainer
+        public Dense GetOutputProjection() => _outProj;
+        public LayerNorm GetFinalLayerNorm() => _lnFinal;
+        public TransformerBlock GetLastBlock() => _blocks[_numLayers - 1];
+
+
+        // Utility to forward up to the last block’s input
+        public float[,] ForwardUntilLastBlock(float[,] xEmb)
+        {
+            var H = xEmb;
+            for (int i = 0; i < _numLayers - 1; i++)
+                H = _blocks[i].Forward(H);
+            return H; // input to last block
+        }
+
+    }
+
+}
+
+using chatbotAPI.Layers.MyEmbedding;
+
+namespace chatbotAPI
+{
+    public class Program
+    {
+        public static void Main(string[] args)
+        {
+            var builder = WebApplication.CreateBuilder(args);
+
+            // Add services to the container.
+            builder.Services.AddScoped<ITokeniserLayers, TokeniserLayers>();
+            builder.Services.AddControllers();
+            // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
+            builder.Services.AddEndpointsApiExplorer();
+            builder.Services.AddSwaggerGen();
+
+            var app = builder.Build();
+
+            // Configure the HTTP request pipeline.
+            if (app.Environment.IsDevelopment())
+            {
+                app.UseSwagger();
+                app.UseSwaggerUI();
+            }
+
+            app.UseStaticFiles();
+
+            app.UseHttpsRedirection();
+
+            app.UseAuthorization();
+
+
+            app.MapControllers();
+
+            app.Run();
+        }
+    }
+}
