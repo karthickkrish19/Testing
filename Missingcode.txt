@@ -1,0 +1,480 @@
+Here is a comprehensive full code outline to fix your chatbot model so it trains, saves, loads weights properly, and uses trained weights in inference. This example merges and expands on your original code with added save/load methods and usage integrated into controller endpoints.
+
+Full code for EmbeddingLayer with save/load
+namespace chatbotAPI.Layers.MyEmbedding
+{
+    public class EmbeddingLayer
+    {
+        public int VocabSize { get; }
+        public int DModel { get; }
+        private float[,] _weights;
+        private static readonly Random _rng = new Random(42);
+
+        public EmbeddingLayer(int vocabSize, int dModel, bool init = true)
+        {
+            VocabSize = vocabSize;
+            DModel = dModel;
+            _weights = init ? XavierUniform(vocabSize, dModel) : new float[vocabSize, dModel];
+        }
+
+        public float[,] Forward(int[] tokenIds)
+        {
+            int seqLen = tokenIds.Length;
+            var output = new float[seqLen, DModel];
+
+            for (int i = 0; i < seqLen; i++)
+            {
+                int id = tokenIds[i];
+                if (id < 0 || id >= VocabSize)
+                    throw new ArgumentOutOfRangeException(nameof(tokenIds), $"Token id {id} out of range [0,{VocabSize}).");
+
+                for (int d = 0; d < DModel; d++)
+                    output[i, d] = _weights[id, d];
+            }
+            return output;
+        }
+
+        public void Save(string path) => SaveMatrix(path, _weights);
+        public void Load(string path) => _weights = LoadMatrix(path);
+
+        private static float[,] XavierUniform(int rows, int cols)
+        {
+            var w = new float[rows, cols];
+            float limit = (float)Math.Sqrt(6.0 / (rows + cols));
+            for (int r = 0; r < rows; r++)
+                for (int c = 0; c < cols; c++)
+                    w[r, c] = RandUniform(-limit, limit);
+            return w;
+        }
+
+        private static float RandUniform(float a, float b)
+            => a + (float)_rng.NextDouble() * (b - a);
+
+        private static void SaveMatrix(string path, float[,] mat)
+        {
+            using var fs = new FileStream(path, FileMode.Create, FileAccess.Write);
+            using var bw = new BinaryWriter(fs);
+            int rows = mat.GetLength(0);
+            int cols = mat.GetLength(1);
+            bw.Write(rows);
+            bw.Write(cols);
+            for (int r = 0; r < rows; r++)
+                for (int c = 0; c < cols; c++)
+                    bw.Write(mat[r, c]);
+        }
+
+        private static float[,] LoadMatrix(string path)
+        {
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read);
+            using var br = new BinaryReader(fs);
+            int rows = br.ReadInt32();
+            int cols = br.ReadInt32();
+            var mat = new float[rows, cols];
+            for (int r = 0; r < rows; r++)
+                for (int c = 0; c < cols; c++)
+                    mat[r, c] = br.ReadSingle();
+            return mat;
+        }
+    }
+}
+
+LayerNorm with save/load
+
+namespace chatbotAPI.Layers.MyTransformer
+{
+    public class LayerNorm
+    {
+        private readonly int _d;
+        private readonly float[] _gamma;
+        private readonly float[] _beta;
+
+        public LayerNorm(int d)
+        {
+            _d = d;
+            _gamma = Enumerable.Repeat(1f, d).ToArray();
+            _beta = new float[d];
+        }
+
+        public float[,] Forward(float[,] x)
+        {
+            int T = x.GetLength(0);
+            int D = x.GetLength(1);
+            var y = new float[T, D];
+
+            for (int t = 0; t < T; t++)
+            {
+                float mean = 0f;
+                for (int d = 0; d < D; d++)
+                    mean += x[t, d];
+                mean /= D;
+
+                float variance = 0f;
+                for (int d = 0; d < D; d++)
+                {
+                    float diff = x[t, d] - mean;
+                    variance += diff * diff;
+                }
+                variance /= D;
+                float invStd = 1f / (float)Math.Sqrt(variance + 1e-5f);
+
+                for (int d = 0; d < D; d++)
+                    y[t, d] = _gamma[d] * (x[t, d] - mean) * invStd + _beta[d];
+            }
+            return y;
+        }
+
+        public void Save(BinaryWriter bw)
+        {
+            bw.Write(_d);
+            for (int i = 0; i < _d; i++) bw.Write(_gamma[i]);
+            for (int i = 0; i < _d; i++) bw.Write(_beta[i]);
+        }
+
+        public void Load(BinaryReader br)
+        {
+            int d = br.ReadInt32();
+            if (d != _d) throw new InvalidOperationException("LayerNorm dimension mismatch.");
+            for (int i = 0; i < _d; i++) _gamma[i] = br.ReadSingle();
+            for (int i = 0; i < _d; i++) _beta[i] = br.ReadSingle();
+        }
+    }
+}
+
+Dense with save/load
+
+namespace chatbotAPI.Layers.MyTransformer
+{
+    public class Dense
+    {
+        private float[,] _W;
+        private float[] _b;
+        private int _in;
+        private int _out;
+
+        public Dense(int inDim, int outDim, bool init = true)
+        {
+            _in = inDim;
+            _out = outDim;
+            _W = new float[inDim, outDim];
+            _b = new float[outDim];
+            if (init) XavierInit();
+        }
+
+        private void XavierInit()
+        {
+            float limit = (float)Math.Sqrt(6.0 / (_in + _out));
+            var rng = new Random(1337);
+            for (int i = 0; i < _in; i++)
+                for (int j = 0; j < _out; j++)
+                    _W[i, j] = (float)(rng.NextDouble() * 2 * limit - limit);
+        }
+
+        public float[,] Forward(float[,] x)
+        {
+            int T = x.GetLength(0);
+            var y = new float[T, _out];
+            for (int t = 0; t < T; t++)
+                for (int j = 0; j < _out; j++)
+                {
+                    float sum = _b[j];
+                    for (int i = 0; i < _in; i++)
+                        sum += x[t, i] * _W[i, j];
+                    y[t, j] = sum;
+                }
+            return y;
+        }
+
+        public void Save(BinaryWriter bw)
+        {
+            bw.Write(_in);
+            bw.Write(_out);
+            for (int i = 0; i < _in; i++)
+                for (int j = 0; j < _out; j++)
+                    bw.Write(_W[i, j]);
+            for (int j = 0; j < _out; j++)
+                bw.Write(_b[j]);
+        }
+
+        public void Load(BinaryReader br)
+        {
+            int inDim = br.ReadInt32();
+            int outDim = br.ReadInt32();
+            if (inDim != _in || outDim != _out)
+                throw new InvalidOperationException("Dense layer shape mismatch.");
+
+            for (int i = 0; i < _in; i++)
+                for (int j = 0; j < _out; j++)
+                    _W[i, j] = br.ReadSingle();
+            for (int j = 0; j < _out; j++)
+                _b[j] = br.ReadSingle();
+        }
+
+        public float[,] GetWeights() => _W;
+        public float[] GetBias() => _b;
+    }
+}
+
+TransformerModel Save/Load and related classes
+Implement `Save` and `Load` for your transformer model:
+
+namespace chatbotAPI.Layers.MyTransformer
+{
+    public class TransformerModel
+    {
+        // required readonly fields e.g. _dModel, _numHeads, _numLayers, _vocabSize
+        // list of blocks _blocks: List<TransformerBlock>
+        // final LayerNorm _lnFinal
+        // output projection Dense _outProj
+
+        public void Save(string path)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            using var fs = new FileStream(path, FileMode.Create, FileAccess.Write);
+            using var bw = new BinaryWriter(fs);
+
+            bw.Write(_dModel);
+            bw.Write(_numHeads);
+            bw.Write(_numLayers);
+            bw.Write(_vocabSize);
+
+            foreach (var block in _blocks)
+                block.Save(bw);
+
+            _lnFinal.Save(bw);
+            _outProj.Save(bw);
+        }
+
+        public void Load(string path)
+        {
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read);
+            using var br = new BinaryReader(fs);
+
+            int d = br.ReadInt32();
+            int h = br.ReadInt32();
+            int L = br.ReadInt32();
+            int V = br.ReadInt32();
+
+            if (d != _dModel || h != _numHeads || L != _numLayers || V != _vocabSize)
+                throw new InvalidOperationException("Transformer model parameters mismatch.");
+
+            for (int i = 0; i < _numLayers; i++)
+                _blocks[i].Load(br);
+
+            _lnFinal.Load(br);
+            _outProj.Load(br);
+        }
+    }
+
+    public class TransformerBlock
+    {
+        public void Save(BinaryWriter bw)
+        {
+            bw.Write(_dModel);
+            bw.Write(_ffnDim);
+            _ln1.Save(bw);
+            _ln2.Save(bw);
+            _attn.Save(bw);
+            _ffn1.Save(bw);
+            _ffn2.Save(bw);
+        }
+
+        public void Load(BinaryReader br)
+        {
+            int d = br.ReadInt32();
+            int ffn = br.ReadInt32();
+            if (d != _dModel || ffn != _ffnDim)
+                throw new InvalidOperationException("TransformerBlock shape mismatch.");
+
+            _ln1.Load(br);
+            _ln2.Load(br);
+            _attn.Load(br);
+            _ffn1.Load(br);
+            _ffn2.Load(br);
+        }
+    }
+
+    public class MultiHeadSelfAttention
+    {
+        public void Save(BinaryWriter bw)
+        {
+            bw.Write(_dModel);
+            bw.Write(_numHeads);
+            _Wq.Save(bw);
+            _Wk.Save(bw);
+            _Wv.Save(bw);
+            _Wo.Save(bw);
+        }
+
+        public void Load(BinaryReader br)
+        {
+            int d = br.ReadInt32();
+            int h = br.ReadInt32();
+            if (d != _dModel || h != _numHeads)
+                throw new InvalidOperationException("MHA parameters mismatch.");
+
+            _Wq.Load(br);
+            _Wk.Load(br);
+            _Wv.Load(br);
+            _Wo.Load(br);
+        }
+    }
+}
+
+Updated Controller Example for Training and Chatbot
+[Route("api/[controller]")]
+[ApiController]
+public class ChatbotController : ControllerBase
+{
+    private readonly ITokeniserLayers _tokeniserLayers;
+
+    public ChatbotController(ITokeniserLayers tokeniserService)
+    {
+        _tokeniserLayers = tokeniserService ?? throw new Exception("Tokeniser service cannot be null");
+    }
+
+    [HttpPost("train-output-proj")]
+    public IActionResult TrainOutputProjection([FromBody] TrainReq req)
+    {
+        if (req == null || req.Epochs <= 0)
+            return BadRequest(new { Error = "Provide positive epochs." });
+
+        var inputPath = Path.Combine("wwwroot", "data", "input", "sampleinput.txt");
+        if (!System.IO.File.Exists(inputPath))
+            return BadRequest(new { Error = "Corpus not found." });
+
+        var text = System.IO.File.ReadAllText(inputPath);
+        var ids = _tokeniserLayers.Encode(text);
+
+        int ctx = req.Context <= 0 ? 64 : req.Context;
+        var sequences = new List<int[]>();
+        for (int start = 0; start + ctx < ids.Count; start += ctx)
+            sequences.Add(ids.Skip(start).Take(ctx).ToArray());
+
+        if (sequences.Count == 0)
+            return BadRequest(new { Error = "Not enough tokens in corpus for chosen context." });
+
+        int vocabSize = _tokeniserLayers.GetVocabSize();
+        var emb = new EmbeddingLayer(vocabSize, req.DModel);
+        var pos = new PositionalEncodingLayer(ctx, req.DModel);
+        var model = new TransformerModel(req.DModel, req.NumHeads, req.NumLayers, vocabSize);
+        var trainer = new OutputLayerTrainer(model, lr: req.LR);
+
+        float lastLoss = 0f;
+        for (int epoch = 1; epoch <= req.Epochs; epoch++)
+        {
+            float sumLoss = 0f; int count = 0;
+            foreach (var seq in sequences)
+            {
+                if (seq.Length < 2) continue;
+                var xIds = seq.Take(seq.Length - 1).ToArray();
+                var yIds = seq.Skip(1).ToArray();
+
+                var xEmb = EmbeddingComposer.ComposeWithSinusoidal(emb, pos, xIds, true);
+                var loss = trainer.TrainStep(xEmb, yIds);
+                sumLoss += loss; count++;
+            }
+            lastLoss = sumLoss / Math.Max(count, 1);
+            Console.WriteLine($"Epoch {epoch}/{req.Epochs} - loss: {lastLoss:F4}");
+        }
+
+        // Save trained model and embedding
+        var saveDir = Path.Combine("wwwroot", "data", "model");
+        Directory.CreateDirectory(saveDir);
+        string modelPath = Path.Combine(saveDir, "transformer.bin");
+        string embPath = Path.Combine(saveDir, "tok_emb.bin");
+        model.Save(modelPath);
+        emb.Save(embPath);
+
+        return Ok(new { Message = "Training finished and model saved.", Loss = lastLoss });
+    }
+
+    [HttpPost("chatbot")]
+    public IActionResult ChatBotInterface([FromBody] GenRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req.Text))
+            return BadRequest(new { Error = "Input text is empty." });
+
+        var tokenIds = _tokeniserLayers.Encode(req.Text).Where(x => x != 4).ToList();
+        if (tokenIds.Count == 0)
+            return Ok(new { Input = req.Text, TokenIds = tokenIds, Output = "" });
+
+        int vocabSize = _tokeniserLayers.GetVocabSize();
+
+        var modelPath = Path.Combine("wwwroot", "data", "model", "transformer.bin");
+        var embPath = Path.Combine("wwwroot", "data", "model", "tok_emb.bin");
+
+        if (!System.IO.File.Exists(modelPath) || !System.IO.File.Exists(embPath))
+            return BadRequest(new { Error = "Model weights not found. Train the model first." });
+
+        var tokEmb = new EmbeddingLayer(vocabSize, req.DModel, init: false);
+        tokEmb.Load(embPath);
+
+        var posEmb = new PositionalEncodingLayer(req.MaxLen, req.DModel);
+
+        var model = new TransformerModel(req.DModel, req.NumHeads, req.NumLayers, vocabSize);
+        model.Load(modelPath);
+
+        var generated = new List<int>(tokenIds);
+
+        for (int step = 0; step < req.MaxNewTokens; step++)
+        {
+            var x = EmbeddingComposer.ComposeWithSinusoidal(tokEmb, posEmb, generated.ToArray(), true);
+            var logits = model.Forward(x);
+
+            int T = logits.GetLength(0);
+            int V = logits.GetLength(1);
+            var last = new float[V];
+            for (int j = 0; j < V; j++) last[j] = logits[T - 1, j];
+
+            int nextId = req.Sampling switch
+            {
+                "greedy" => Sampler.Greedy(last),
+                "topk" => Sampler.TopKSample(last, req.TopK, req.Temperature),
+                "topp" => Sampler.TopPSample(last, req.TopP, req.Temperature),
+                _ => Sampler.Greedy(last),
+            };
+
+            generated.Add(nextId);
+
+            if (nextId == 3) break; // <eos>
+            if (generated.Count >= req.MaxLen) break;
+        }
+
+        var outputText = _tokeniserLayers.Decode(generated);
+        return Ok(new { Input = req.Text, TokenIds = generated, Output = outputText });
+    }
+
+    public class TrainReq
+    {
+        public int DModel { get; set; } = 64;
+        public int NumHeads { get; set; } = 4;
+        public int NumLayers { get; set; } = 2;
+        public int Context { get; set; } = 64;
+        public int Epochs { get; set; } = 3;
+        public float LR { get; set; } = 1e-3f;
+    }
+
+    public class GenRequest
+    {
+        public string Text { get; set; } = string.Empty;
+        public int DModel { get; set; } = 64;
+        public int NumHeads { get; set; } = 8;
+        public int NumLayers { get; set; } = 4;
+        public int MaxLen { get; set; } = 128;
+        public int MaxNewTokens { get; set; } = 20;
+        public string Sampling { get; set; } = "greedy";
+        public int TopK { get; set; } = 50;
+        public float TopP { get; set; } = 0.95f;
+        public float Temperature { get; set; } = 1.0f;
+    }
+}
+
+This full code includes:
+•	EmbeddingLayer with explicit binary save/load of weights
+•	LayerNorm and Dense layers with save/load methods
+•	Transformer blocks and MHA save/load
+•	Controller endpoints that save after training, load for inference
+•	Tokenizer use consistent as before
+•	Generation loop using saved weights no longer random initialization
+Use this as your base to fix the problem of “no learned parameters used at inference.” You can expand it similarly to your other training methods.
+Let me know if you want the full detailed save/load code for MHA or TransformerBlock or help with debugging specific parts further. This should correct the fundamental issue where your output is “not correct” due to newly initialized weights every request
